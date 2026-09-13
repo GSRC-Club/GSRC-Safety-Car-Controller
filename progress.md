@@ -8,8 +8,9 @@
 - [x] Add Windows CI tests, standalone packaging checks, repository instructions and source provenance.
 - Verification: clean `npm ci`; 51/51 tests; syntax checks on 29 JavaScript files; pinned and timestamped Windows NSIS build; source and packaged-ASAR Electron rehearsal checks at 1720×980 and packaged 1440×900, with 18 finite car markers, local logo and live output disarmed. Screenshots reviewed.
 - Build/evidence location: `Y:\GSRC-Safety-Car-Controller-builds\0.2.1`. Installer SHA-256: `CE2AB334CF429EBBED6F4576729C096DDF2FD784EAAF8DFDB58CF90A64B2B61D`.
-- Published as the private GitHub pre-release [v0.2.1](https://github.com/GSRC-Club/GSRC-Safety-Car-Controller/releases/tag/v0.2.1) with the signed installer, updater blockmap, public trust certificate and release manifest. A download-back check matched the local installer byte size and SHA-256.
-- Environment: local Windows development and isolated rehearsal profiles. No NUC/NAS application changes, installer distribution or production deployment.
+- Published as the public GitHub pre-release [v0.2.1](https://github.com/GSRC-Club/GSRC-Safety-Car-Controller/releases/tag/v0.2.1) with the signed installer, updater blockmap, public trust certificate and release manifest. A download-back check matched the local installer byte size and SHA-256.
+- Repository-publication audit: no committed credentials, private signing keys, databases or runtime driver data; public visibility does not change the private software licence.
+- Environment: local Windows development and isolated rehearsal profiles, followed by public GitHub repository and release publication. No NUC/NAS application or production deployment.
 
 ## Remaining acceptance and development
 

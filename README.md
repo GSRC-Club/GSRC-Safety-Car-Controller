@@ -2,6 +2,8 @@
 
 A separate Windows race-control application for GSRC iRacing hosted races. It provides four explicit procedures:
 
+> **Licence:** This public repository makes the source and release downloads visible; it does not make the software open source. No permission to reuse, redistribute, sell or publish derivative works is granted beyond the terms in [LICENSE.md](LICENSE.md). GSRC operational use remains covered by that licence.
+
 - **GSRC Code 80 Safety Car** — controlled bunch-up, lapped-car wave-arounds, restart control and deferred enforcement.
 - **Strict Code 80** — a true gap-preserving full-course speed restriction with no field bunching.
 - **iRacing Full-Course Yellow** — native `!yellow`, pit and pace-lap administration.
