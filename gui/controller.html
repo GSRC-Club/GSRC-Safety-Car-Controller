@@ -1,0 +1,157 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>GSRC Safety Car Controller</title>
+  <link rel="stylesheet" href="controller.css">
+  <link rel="stylesheet" href="operations.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand"><img id="gsrc-logo" alt="GSRC"><div><strong>SAFETY CAR</strong><span>CONTROL CENTRE</span></div></div>
+    <div class="session">
+      <span id="connection-dot" class="status-dot"></span>
+      <div><strong id="session-name">Waiting for iRacing</strong><span id="track-name">Connect the simulator or enable rehearsal mode</span></div>
+    </div>
+    <label class="switch rehearsal"><input id="simulation-toggle" type="checkbox"><span></span><b>REHEARSAL</b></label>
+    <label class="arm-control"><input id="output-armed" type="checkbox"><span class="arm-lamp"></span><div><b>LIVE OUTPUT</b><small id="arm-caption">DISARMED · preview only</small></div></label>
+  </header>
+
+  <main class="workspace">
+    <aside class="left-rail panel">
+      <div class="panel-title"><span>01</span><div><strong>Race plan</strong><small>Choose the procedure and safeguards</small></div></div>
+
+      <section class="group">
+        <div class="section-label">Deployment procedure</div>
+        <div class="procedure-grid">
+          <label class="procedure-card"><input type="radio" name="procedure" value="code80-bunch" checked><span class="procedure-icon purple">80</span><b>GSRC Code 80</b><small>Bunch field + wave-arounds</small></label>
+          <label class="procedure-card"><input type="radio" name="procedure" value="code80-strict"><span class="procedure-icon purple-outline">80</span><b>Strict Code 80</b><small>Preserves all race gaps</small></label>
+          <label class="procedure-card"><input type="radio" name="procedure" value="native"><span class="procedure-icon yellow">Y</span><b>iRacing yellow</b><small>Native pace car control</small></label>
+          <label class="procedure-card"><input type="radio" name="procedure" value="manual-driver"><span class="procedure-icon cyan">SC</span><b>Human safety car</b><small>Driver leaves pit lane</small></label>
+        </div>
+      </section>
+
+      <section class="group compact-grid">
+        <label><span>Control</span><select id="control-mode"><option value="manual">Manual call</option><option value="automatic">Automatic</option></select></label>
+        <label><span>Limit</span><div class="unit-input"><input id="speed-limit" type="number" min="40" max="160" value="80"><em>km/h</em></div></label>
+        <label><span>Leader gather</span><div class="unit-input"><input id="leader-gather" type="number" min="40" max="100" value="72"><em>km/h</em></div></label>
+        <label><span>Tolerance</span><div class="unit-input"><input id="speed-tolerance" type="number" min="0" max="20" value="4"><em>km/h</em></div></label>
+        <label><span>Correction time</span><div class="unit-input"><input id="correction-time" type="number" min="5" max="120" value="30"><em>sec</em></div></label>
+        <label><span>Penalty</span><select id="penalty"><option value="D">Drive-through</option><option value="0">Stop & go</option><option value="10">10 sec hold</option><option value="30">30 sec hold</option></select></label>
+      </section>
+
+      <details class="group" open>
+        <summary><span>Wave-arounds</span><label class="mini-switch"><input id="waves-enabled" type="checkbox" checked><span></span></label></summary>
+        <div class="detail-body compact-grid">
+          <label><span>Dispatch</span><select id="wave-mode"><option value="manual">Click + confirm</option><option value="automatic">Automatic queue</option></select></label>
+          <label><span>Spacing</span><div class="unit-input"><input id="wave-spacing" type="number" min="3" max="30" value="5"><em>sec</em></div></label>
+          <p class="rule-note">Eligible lapped cars are ordered from the reference car backwards. Every release is one car at a time.</p>
+        </div>
+      </details>
+
+      <details class="group">
+        <summary><span>Scheduled safety cars</span><label class="mini-switch"><input id="schedule-enabled" type="checkbox"><span></span></label></summary>
+        <div class="detail-body compact-grid">
+          <label><span>Measure</span><select id="schedule-basis"><option value="laps">Race laps</option><option value="minutes">Race minutes</option></select></label>
+          <label><span>Calls</span><input id="schedule-count" type="number" min="1" max="10" value="2"></label>
+          <label><span>Earliest</span><input id="schedule-first" type="number" min="1" value="10"></label>
+          <label><span>Latest</span><input id="schedule-last" type="number" min="1" value="45"></label>
+          <label><span>Min spacing</span><input id="schedule-spacing" type="number" min="1" value="8"></label>
+          <label class="check-line"><input id="schedule-random" type="checkbox" checked><span>Randomise within window</span></label>
+          <label class="wide"><span>Manual call points</span><input id="schedule-points" type="text" inputmode="numeric" value="18, 36" placeholder="e.g. 18, 36, 52"></label>
+          <label class="check-line wide"><input id="native-counts" type="checkbox" checked><span>Native iRacing yellows reduce the remaining scheduled calls</span></label>
+        </div>
+      </details>
+
+      <details class="group">
+        <summary><span>Incident auto-trigger</span><label class="mini-switch"><input id="incident-enabled" type="checkbox"><span></span></label></summary>
+        <div class="detail-body compact-grid">
+          <label><span>Review at</span><div class="unit-input"><input id="incident-review" type="number" min="2" max="10" value="3"><em>cars</em></div></label>
+          <label><span>Auto-call at</span><div class="unit-input"><input id="incident-auto" type="number" min="3" max="12" value="5"><em>cars</em></div></label>
+          <label><span>Track window</span><div class="unit-input"><input id="incident-track" type="number" min="2" max="25" value="10"><em>%</em></div></label>
+          <label><span>Time window</span><div class="unit-input"><input id="incident-time" type="number" min="1" max="20" value="3"><em>sec</em></div></label>
+          <p class="rule-note">Only confirmed 4x deltas are eligible for automatic deployment. Physics estimates can alert but cannot auto-penalise.</p>
+        </div>
+      </details>
+
+      <details class="group">
+        <summary><span>Audio announcements</span><label class="mini-switch"><input id="audio-enabled" type="checkbox"><span></span></label></summary>
+        <div class="detail-body compact-grid">
+          <label class="wide"><span>Virtual cable output</span><select id="audio-device"><option value="">Default Windows output</option></select></label>
+          <label><span>iRacing PTT key</span><select id="ptt-key"><option>f9</option><option>f10</option><option>f11</option><option>f12</option></select></label>
+          <p class="rule-note">Set this output to VB-CABLE Input, then select VB-CABLE Output as iRacing's microphone. Text remains the authoritative fallback.</p>
+        </div>
+      </details>
+
+      <button id="apply-settings" class="secondary wide-button">Apply race plan</button>
+    </aside>
+
+    <section class="command-centre">
+      <div class="phase-strip" id="phase-strip">
+        <div data-phase="idle" class="active"><i>1</i><span>READY</span></div><b></b>
+        <div data-phase="countdown"><i>2</i><span>COUNTDOWN</span></div><b></b>
+        <div data-phase="gathering"><i>3</i><span>GATHER</span></div><b></b>
+        <div data-phase="wave-arounds"><i>4</i><span>WAVE</span></div><b></b>
+        <div data-phase="one-to-green"><i>5</i><span>RESTART</span></div><b></b>
+        <div data-phase="green"><i>6</i><span>GREEN</span></div>
+      </div>
+
+      <section id="operation-alert" class="operation-alert" hidden>
+        <div><strong id="operation-alert-title">LIVE OUTPUT STOPPED</strong><span id="operation-alert-copy"></span></div>
+        <div id="operation-alert-actions">
+          <button id="recovery-resume" hidden>RESUME DISARMED</button>
+          <button id="recovery-close" hidden>CLOSE RECORD</button>
+          <button id="interlock-ack" hidden>ACKNOWLEDGE</button>
+        </div>
+      </section>
+
+      <section class="hero-control panel">
+        <div class="hero-status">
+          <div id="flag-disc" class="flag-disc idle"><span id="flag-code">SC</span><small id="countdown-value"></small></div>
+          <div><small id="phase-kicker">SYSTEM READY</small><h1 id="phase-title">No safety car active</h1><p id="phase-instruction">Select the race plan, rehearse it, then arm live output when iRacing is connected.</p></div>
+        </div>
+        <div class="hero-actions">
+          <button id="deploy-button" class="deploy"><span>DEPLOY</span><small id="deploy-label">GSRC CODE 80</small></button>
+          <button id="cancel-button" class="danger" disabled>CANCEL PROCEDURE</button>
+        </div>
+      </section>
+
+      <section class="action-grid" style="grid-template-columns:repeat(3,1fr)">
+        <button data-action="pack-ready"><span>PACK STABLE</span><small>Open pits / begin waves</small></button>
+        <button data-action="one-to-green"><span>ONE TO GREEN</span><small>Prepare restart order</small></button>
+        <button data-action="restart"><span>ARM RESTART</span><small>Lock order at control line</small></button>
+        <button data-action="green" class="green"><span>FORCE GREEN</span><small>Issue queued penalties</small></button>
+        <button data-action="pace-laps" data-delta="-1"><span>PACE LAP −1</span><small>Shorten native yellow</small></button>
+        <button data-action="pace-laps" data-delta="1"><span>PACE LAP +1</span><small>Extend native yellow</small></button>
+      </section>
+
+      <section class="track-panel panel">
+        <div class="panel-heading"><div><strong>Field geometry</strong><span id="track-subtitle">Bathurst / Mount Panorama - default schematic</span></div><div class="legend"><span class="leader-key">Leader</span><span class="wave-key">Wave</span><span class="warn-key">Warning</span></div></div>
+        <div id="track-orbit" class="track-orbit"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 260" role="img" aria-label="Bathurst Mount Panorama default track outline"><title>Bathurst - Mount Panorama</title><desc>Default schematic outline, not a loaded session map. Adapted from Will Pittenger, CC BY-SA 3.0. See docs/THIRD-PARTY-NOTICES.md.</desc><path id="track-outline" d="M 219.26,155.37 C 221.77,166.78 224.64,179.04 226.96,189.54 C 228.13,194.83 231.72,195.66 239.11,193.98 C 297.78,180.66 370.61,163.73 426.85,151.71 C 433.06,150.38 441.80,154.17 442.89,162.89 C 443.29,166.11 442.91,170.36 443.01,174.49 C 443.07,176.89 440.26,180.31 439.83,182.95 C 437.69,196.17 436.99,205.14 436.32,218.49 C 436.16,221.55 435.19,222.00 436.93,224.48 C 438.88,227.25 442.15,229.96 444.64,231.51 C 449.07,234.28 453.63,232.43 455.69,226.82 C 457.08,223.04 458.47,218.27 461.05,215.01 C 463.16,212.35 469.91,210.03 473.32,209.14 C 479.82,207.46 484.55,207.35 491.26,206.86 C 495.16,206.57 500.99,208.05 503.90,210.62 C 507.19,213.53 510.24,214.08 514.20,216.44 C 520.95,220.45 528.17,223.27 535.72,225.40 C 542.02,227.18 544.77,226.34 551.27,225.91 C 556.72,225.56 566.25,221.26 569.36,216.98 C 578.43,204.47 581.35,197.25 589.36,182.67 C 591.56,178.66 591.02,173.58 589.61,169.19 C 584.32,152.59 577.27,142.98 572.33,126.56 C 571.35,123.32 575.76,119.71 575.35,116.52 C 574.87,112.90 571.04,110.22 569.15,106.55 C 567.80,103.94 569.07,102.08 569.89,99.41 C 570.52,97.39 575.12,95.80 575.32,93.88 C 575.57,91.45 574.38,87.45 573.63,84.68 C 573.15,82.87 572.98,79.94 573.55,78.16 C 575.66,71.56 579.82,71.11 580.91,64.64 C 581.38,61.84 577.65,55.62 577.59,52.84 C 577.54,50.38 579.38,45.15 581.35,43.15 C 584.91,39.56 591.45,39.98 592.86,35.74 C 593.57,33.61 589.45,27.18 586.04,26.47 C 578.25,24.86 569.88,23.56 560.59,22.59 C 555.34,22.04 547.46,23.77 543.44,24.69 C 475.85,40.07 419.31,53.79 353.17,70.87 C 342.83,73.54 320.88,69.68 305.73,69.71 C 303.93,69.71 300.52,69.80 299.29,73.56 C 297.96,77.64 293.67,81.38 290.78,84.27 C 288.75,86.30 285.81,88.29 282.99,88.96 C 259.37,94.62 235.91,100.40 213.23,106.47 C 211.24,107.00 210.17,110.74 210.55,112.75 C 213.23,127.02 216.07,140.87 219.26,155.37 z" fill="none" stroke="#2b4652" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/><g id="orbit-cars"></g></svg><div class="track-centre"><b id="orbit-phase">READY</b><span id="orbit-summary">0 cars connected</span></div></div>
+      </section>
+
+      <section class="lower-grid">
+        <div class="panel event-panel"><div class="panel-heading"><div><strong>Race Control feed</strong><span>Exact messages and decisions</span></div><button id="export-audit" class="text-button">EXPORT</button></div><div id="event-feed" class="event-feed"><p class="empty">Events will appear here.</p></div></div>
+        <div class="panel queue-panel"><div class="panel-heading"><div><strong>Deferred penalties</strong><span>Issued only after green</span></div><span id="penalty-count" class="badge">0</span></div><div id="penalty-list" class="penalty-list"><p class="empty">No penalties queued.</p></div></div>
+      </section>
+    </section>
+
+    <aside class="right-rail panel">
+      <div class="panel-title"><span>02</span><div><strong>Live field</strong><small>Click highlighted rows to wave</small></div></div>
+      <div class="field-toolbar"><input id="driver-filter" type="search" placeholder="Find driver or car…"><select id="field-view"><option value="all">Entire field</option><option value="wave">Wave candidates</option><option value="warning">Warnings</option></select></div>
+      <div class="field-head"><span>P</span><span>CAR / DRIVER</span><span>LAP</span><span>SPEED</span><span>STATE</span></div>
+      <div id="field-rows" class="field-rows"><p class="empty">Waiting for telemetry.</p></div>
+      <div class="rehearsal-tools" id="rehearsal-tools" hidden>
+        <div class="section-label">Inject rehearsal event</div>
+        <select id="sim-car"></select>
+        <div><button data-sim="pass">ILLEGAL PASS</button><button data-sim="speed">SPEEDING</button><button data-sim="lap-down">LAP DOWN</button><button data-sim="incident">4X INCIDENT</button></div>
+      </div>
+    </aside>
+  </main>
+
+  <dialog id="confirm-dialog"><form method="dialog"><span class="dialog-kicker">RACE CONTROL CONFIRMATION</span><h2 id="dialog-title">Confirm action</h2><p id="dialog-copy"></p><div><button value="cancel" class="secondary">CANCEL</button><button id="dialog-confirm" value="confirm" class="primary">CONFIRM</button></div></form></dialog>
+  <div id="toast-stack" aria-live="polite"></div>
+  <script src="controller.js"></script>
+</body>
+</html>

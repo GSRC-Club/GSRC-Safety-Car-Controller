@@ -1,0 +1,15 @@
+node_modules/
+release/
+artifacts/
+coverage/
+*.log
+.env
+.env.*
+*.pfx
+*.p12
+*.key
+*.pem
+controller-settings.json
+*.db
+*.db-*
+.DS_Store

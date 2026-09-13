@@ -1,0 +1,92 @@
+{
+  "name": "gsrc-safety-car-controller",
+  "version": "0.2.1",
+  "description": "GSRC Safety Car Controller \u2014 assisted iRacing caution, Code 80, wave-around and restart control",
+  "author": "Joshua Zuino / Gentlemen's Sim Racing Club Inc.",
+  "main": "gui/main.js",
+  "private": true,
+  "license": "SEE LICENSE IN LICENSE.md",
+  "scripts": {
+    "start": "electron .",
+    "test": "node --test test/*.test.js",
+    "signing:check": "node scripts/signing-preflight.cjs",
+    "verify:release": "node scripts/verify-release.cjs",
+    "dist": "node scripts/signing-preflight.cjs && electron-builder --win nsis && node scripts/verify-release.cjs",
+    "release": "npm test && npm run dist"
+  },
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "dependencies": {
+    "koffi": "^2.10.0",
+    "yaml": "^2.5.0"
+  },
+  "devDependencies": {
+    "electron": "^43.1.0",
+    "electron-builder": "^26.15.3"
+  },
+  "build": {
+    "appId": "club.gsrc.safety-car-controller",
+    "productName": "GSRC Safety Car Controller",
+    "directories": {
+      "output": "release"
+    },
+    "electronLanguages": [
+      "en-US"
+    ],
+    "beforePack": "scripts/signing-preflight.cjs",
+    "afterAllArtifactBuild": "scripts/verify-release.cjs",
+    "files": [
+      "gui/**/*",
+      "src/**/*",
+      "scripts/synth-speech.ps1",
+      "assets/voice/**/*",
+      "research/**/*",
+      "docs/**/*",
+      "README.md",
+      "package.json",
+      "shared/**/*",
+      "assets/tracks/**/*"
+    ],
+    "extraResources": [
+      {
+        "from": "assets/GSRCWhiteTrans.png",
+        "to": "assets/GSRCWhiteTrans.png"
+      },
+      {
+        "from": "LICENSE.md",
+        "to": "LICENSE.md"
+      }
+    ],
+    "asarUnpack": [
+      "node_modules/koffi/**",
+      "assets/**",
+      "scripts/**"
+    ],
+    "win": {
+      "target": "nsis",
+      "icon": "assets/GSRCWhiteTrans.png",
+      "artifactName": "GSRC-Safety-Car-Controller-Setup-${version}.exe",
+      "verifyUpdateCodeSignature": true,
+      "signtoolOptions": {
+        "certificateSubjectName": "GSRC Safety Car Controller",
+        "certificateSha1": "CC29EA571212019725076F18358828C817C0254F",
+        "publisherName": "GSRC Safety Car Controller",
+        "signingHashAlgorithms": [
+          "sha256"
+        ]
+      }
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": false,
+      "deleteAppDataOnUninstall": false,
+      "include": "installer.nsh"
+    }
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/GSRC-Club/GSRC-Safety-Car-Controller.git"
+  }
+}
