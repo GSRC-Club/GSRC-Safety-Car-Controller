@@ -5,7 +5,7 @@ const RACING_SESSION_STATE = 4;
 function evaluateLiveAuthority(context = {}, boundSessionIdentity = null) {
     if (context.simulated) return { ok: true, rehearsal: true, outputAllowed: false, reason: null };
     if (!context.connected) return blocked('iRacing telemetry is disconnected.');
-    if (context.stale) return blocked('iRacing telemetry is stale.');
+    if (context.stale || context.frameAt != null && Date.now() - context.frameAt > 1500) return blocked('iRacing telemetry is stale.');
     if (!context.isRace) return blocked('The active iRacing session is not a Race session.');
     if (Number(context.sessionState) !== RACING_SESSION_STATE) return blocked('The Race session is not in the Racing state.');
     if (context.replayLive !== true) return blocked('iRacing is not at the live replay frame.');

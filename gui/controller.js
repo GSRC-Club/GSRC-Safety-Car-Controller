@@ -23,6 +23,7 @@ const phaseSequence = ['idle', 'countdown', 'gathering', 'wave-arounds', 'one-to
 function toast(message, error = false) {
     const node = document.createElement('div'); node.className = `toast${error ? ' error' : ''}`; node.textContent = message;
     $('toast-stack').append(node); setTimeout(() => node.remove(), 5000);
+    while ($('toast-stack').children.length > 3) $('toast-stack').firstElementChild.remove();
 }
 
 function confirmAction(title, copy, callback, confirmLabel = 'CONFIRM', cancelCallback = null) {
@@ -45,6 +46,7 @@ function readPlan() {
         procedure: document.querySelector('input[name="procedure"]:checked').value,
         controlMode: $('control-mode').value,
         outputArmed: $('output-armed').checked,
+        code80Laps: Number($('code80-laps').value),
         speedLimitKph: Number($('speed-limit').value), leaderGatherKph: Number($('leader-gather').value), speedToleranceKph: Number($('speed-tolerance').value),
         passCorrectionSeconds: Number($('correction-time').value), penalty: $('penalty').value,
         waveArounds: $('waves-enabled').checked, waveMode: $('wave-mode').value, waveIntervalSeconds: Number($('wave-spacing').value),
@@ -56,6 +58,7 @@ function readPlan() {
 }
 
 function writePlan(c) {
+    $('code80-laps').value = c.code80Laps ?? 2;
     const radio = document.querySelector(`input[name="procedure"][value="${c.procedure}"]`); if (radio) radio.checked = true;
     const values = { 'control-mode': c.controlMode, 'output-armed': c.outputArmed, 'speed-limit': c.speedLimitKph, 'leader-gather': c.leaderGatherKph, 'speed-tolerance': c.speedToleranceKph, 'correction-time': c.passCorrectionSeconds, penalty: c.penalty, 'waves-enabled': c.waveArounds, 'wave-mode': c.waveMode, 'wave-spacing': c.waveIntervalSeconds, 'native-counts': c.nativeYellowsCount, 'schedule-enabled': c.schedule.enabled, 'schedule-basis': c.schedule.basis, 'schedule-count': c.schedule.count, 'schedule-first': c.schedule.first, 'schedule-last': c.schedule.last, 'schedule-spacing': c.schedule.minimumSpacing, 'schedule-random': c.schedule.randomized, 'schedule-points': c.schedule.manualPoints?.join(', '), 'incident-enabled': c.incidentTrigger.enabled, 'incident-review': c.incidentTrigger.reviewAt, 'incident-auto': c.incidentTrigger.autoAt, 'incident-track': c.incidentTrigger.trackWindowPct, 'incident-time': c.incidentTrigger.timeWindowSeconds, 'audio-enabled': c.audio.enabled, 'ptt-key': c.audio.pttKey };
     for (const [id, value] of Object.entries(values)) { const el = $(id); if (!el || value == null) continue; if (el.type === 'checkbox') el.checked = !!value; else el.value = value; }
@@ -86,13 +89,22 @@ function render() {
     $('deploy-label').textContent = procedureName(state.config.procedure);
     const info = state.recoveryRequired ? phaseInfo['recovery-required'] : phaseInfo[state.phase] || phaseInfo.controlled;
     $('phase-kicker').textContent = info[0]; $('phase-title').textContent = info[1]; $('phase-instruction').textContent = info[2];
+    if (state.procedure === 'native' && state.active) $('phase-instruction').textContent = state.nativeYellowSeen ? 'iRacing caution confirmed. Follow native pace instructions; green is confirmed from telemetry.' : 'Yellow requested. Waiting for iRacing caution telemetry; check admin privileges and full-course caution settings.';
+    if (!state.active && !state.authority?.ok) $('phase-instruction').textContent = state.authority?.reason || info[2];
+    if (!state.active && c.hasAI) $('phase-instruction').textContent = 'AI field detected — select iRacing Yellow. Bots cannot follow Code 80 chat instructions.';
+    if (state.code80LapsRemaining != null && state.phase !== 'restart') $('phase-instruction').textContent += ` Planned restart in ${state.code80LapsRemaining} leader lap crossings. ${state.wavesInProgress || 0} waves awaiting rejoin confirmation.`;
+    if (state.config.incidentTrigger.enabled && (c.hasAI || c.incidentDataAvailable === false)) $('phase-instruction').textContent += ' Official incident totals are unavailable for some cars; automatic incident deployment is not assured. Use Deploy manually.';
     $('flag-code').textContent = state.procedure?.includes('80') ? '80' : state.procedure === 'native' ? 'Y' : 'SC';
     $('countdown-value').textContent = state.countdownRemaining ? `${state.countdownRemaining}s` : '';
     $('flag-disc').className = `flag-disc ${state.phase === 'idle' ? 'idle' : state.phase === 'green' ? 'green' : state.phase === 'countdown' ? 'warning' : 'active'}`;
     $('deploy-button').disabled = state.active || operationBlocked || (!c.connected && !c.simulated); $('cancel-button').disabled = !state.active || operationBlocked;
     $('apply-settings').disabled = state.active;
-    const actionStates = { 'pack-ready': ['gathering', 'controlled'], 'one-to-green': ['gathering', 'controlled', 'wave-arounds'], restart: ['one-to-green'], green: ['countdown', 'gathering', 'controlled', 'wave-arounds', 'one-to-green', 'restart'], 'pace-laps': ['controlled'] };
-    document.querySelectorAll('[data-action]').forEach(button => { button.disabled = operationBlocked || !actionStates[button.dataset.action].includes(state.phase) || button.dataset.action === 'pace-laps' && state.procedure !== 'native'; });
+    const actionStates = { 'pack-ready': ['gathering', 'controlled'], 'one-to-green': ['gathering', 'controlled', 'wave-arounds'], restart: ['one-to-green'], green: ['countdown', 'gathering', 'controlled', 'wave-arounds', 'one-to-green', 'restart'], 'pace-laps': ['gathering', 'controlled', 'wave-arounds', 'one-to-green'], 'waves-complete': ['wave-arounds', 'controlled'] };
+    document.querySelectorAll('[data-action]').forEach(button => {
+        const name = button.dataset.action;
+        button.disabled = operationBlocked || !actionStates[name].includes(state.phase) || name === 'pace-laps' && state.procedure === 'manual-driver' || name === 'restart' && state.procedure === 'native' || ['green', 'one-to-green', 'restart'].includes(name) && !!(state.wavesInProgress || state.pendingWaveCount);
+        if (name === 'green') { button.querySelector('span').textContent = state.procedure === 'native' ? 'REQUEST ONE TO GREEN' : 'FORCE GREEN'; button.querySelector('small').textContent = state.procedure === 'native' ? 'iRacing confirms the actual restart' : 'Release field / issue queued penalties'; }
+    });
     renderPhases(); renderField(); renderTrack(); renderEvents(); renderPenalties(); renderSimCars();
 }
 
@@ -112,7 +124,7 @@ function renderField() {
     const rows = $('field-rows'); const wave = new Set((state.waveQueue || []).map(d => d.carIdx)); const warnings = new Map((state.violations || []).filter(v => v.status === 'warning').map(v => [v.carIdx, v])); const drivers = filteredDrivers();
     if (!drivers.length) { rows.innerHTML = '<p class="empty">No drivers match this view.</p>'; return; }
     rows.innerHTML = drivers.map(d => { const isWave = wave.has(d.carIdx); const warning = warnings.get(d.carIdx); const stateName = warning ? warning.type === 'speeding' ? 'SPEED' : 'PASS' : isWave ? 'WAVE' : d.onPitRoad ? 'PIT' : 'OK'; return `<div class="field-row ${warning ? 'warning' : isWave ? 'wave' : ''}" data-car-idx="${d.carIdx}"><span class="pos">${d.position || '—'}</span><span class="driver"><span class="car-number">${escapeHtml(d.carNumber)}</span><span class="driver-name"><b>${escapeHtml(d.name)}</b><small>${d.inWorld === false ? 'Not in world' : `CarIdx ${d.carIdx}`}</small></span></span><span class="metric">${d.lapCompleted ?? '—'}</span><span class="metric">${Number.isFinite(d.speedKph) ? Math.round(d.speedKph) : '—'}</span><span class="state-pill ${warning ? 'warn' : isWave ? 'wave' : ''}">${stateName}</span></div>`; }).join('');
-    rows.querySelectorAll('.field-row.wave').forEach(row => row.onclick = () => { const car = state.waveQueue.find(d => d.carIdx === Number(row.dataset.carIdx)); if (car) confirmAction(`Wave car ${car.carNumber}?`, `${car.name} will be moved up one lap and sent to the end of the pace line. The command is staggered from the previous release.`, () => action('wave', { carIdx: car.carIdx }), 'ISSUE WAVE-AROUND'); });
+    rows.querySelectorAll('.field-row.wave').forEach(row => row.onclick = () => { const car = state.waveQueue.find(d => d.carIdx === Number(row.dataset.carIdx)); if (car) confirmAction(`Wave car ${car.carNumber}?`, state.procedure === 'native' ? 'Request an iRacing wave-by. Verify the simulator instruction.' : 'Privately instruct this driver to pass, complete one lap and rejoin the back. Confirm rejoin before restarting.', () => action('wave', { carIdx: car.carIdx }), 'ISSUE WAVE-AROUND'); });
 }
 
 function renderTrack() {
@@ -140,7 +152,9 @@ document.querySelectorAll('[data-action]').forEach(button => button.onclick = ()
         'one-to-green': ['Call one to green?', 'Pit lane opens and every driver is told to prepare for the restart. Running order remains locked.', 'CALL ONE TO GREEN'],
         restart: ['Arm restart enforcement?', 'The current physical order is locked. Passing before the control line can create a deferred penalty.', 'ARM RESTART'],
         green: ['Force green and release penalties?', 'Racing resumes immediately and every deferred black-flag command enters the serial send queue. This cannot be recalled automatically.', 'FORCE GREEN'],
+        'waves-complete': ['Have all waved cars rejoined?', 'Confirm every released car is back at the rear. This closes wave releases, captures the new order and restores speed enforcement.', 'CONFIRM REJOIN'],
     };
+    if (state.procedure === 'native' && ['green', 'one-to-green'].includes(name)) confirmations[name] = ['Request one to green?', 'Send !pacelaps 1. iRacing controls the pace-car return and green flag; the controller waits for telemetry.', 'REQUEST RESTART'];
     const prompt = confirmations[name];
     if (prompt) confirmAction(prompt[0], prompt[1], () => action(name, payload), prompt[2]); else action(name, payload);
 });
@@ -178,7 +192,7 @@ async function playAnnouncement(item) {
     await waitForAudio(audio);
     let pttHeld = false;
     try {
-        const live = item.armed && state?.config?.outputArmed;
+        const live = item.armed && state?.config?.outputArmed && state?.authority?.outputAllowed && !state.interlock && (!item.procedureId || item.procedureId === state.procedureId);
         if (live) {
             pttHeld = await api.ptt(true, item.key);
             if (!pttHeld) throw new Error('iRacing PTT could not be engaged. Check the simulator window and configured key.');

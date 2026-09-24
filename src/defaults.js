@@ -14,6 +14,7 @@ const DEFAULTS = Object.freeze({
     passCorrectionSeconds: 30,
     penalty: 'D',
     countdownSeconds: 10,
+    code80Laps: 2,
     pitPolicy: 'close-deploy-open-stable',
     waveArounds: true,
     waveMode: 'manual',

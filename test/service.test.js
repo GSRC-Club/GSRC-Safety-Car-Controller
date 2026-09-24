@@ -43,8 +43,8 @@ test('live authority session identity binds SubSessionID and telemetry SessionNu
 });
 
 test('replay authority accepts only a bounded distance from the live frame', () => {
-    assert.equal(replayFrameGap(1000, 1120), 120);
-    assert.equal(replayIsLive(1000, 1180), true);
-    assert.equal(replayIsLive(1000, 1181), false);
+    assert.equal(replayFrameGap(1000, 120), 120);
+    assert.equal(replayIsLive(1000, 180), true);
+    assert.equal(replayIsLive(1000, 181), false);
     assert.equal(replayIsLive(undefined, 1180), false);
 });

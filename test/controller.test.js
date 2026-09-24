@@ -43,7 +43,7 @@ test('uncorrected pass queues penalty and green issues it', () => {
 test('wave-around requires eligibility and speaks leading zero number naturally', () => {
     const controller = new SafetyCarController({}, { now: () => 1000 }); const commands = [];
     controller.on('command', command => commands.push(command)); controller.updateContext(context()); controller.deploy('manual-driver'); controller.markPackReady(); controller.issueWave(3);
-    assert.ok(commands.some(command => command.text.startsWith('!waveby #007')));
+    assert.ok(commands.some(command => command.text.startsWith('/007 WAVE-AROUND')));
     assert.ok(commands.some(command => command.speechText?.includes('zero zero seven')));
     assert.equal(speakCarNumber('123'), 'one two three');
 });
@@ -88,11 +88,11 @@ test('automatic waves wait for a stable pack and stagger releases', () => {
     now += 1; controller.updateContext(packed);
     now += 3001; controller.updateContext(packed);
     assert.equal(controller.phase, 'wave-arounds');
-    assert.equal(commands.filter(command => command.text.startsWith('!waveby')).length, 1);
+    assert.equal(commands.filter(command => command.targetCarIdx != null).length, 1);
     now += 4999; controller.updateContext(packed);
-    assert.equal(commands.filter(command => command.text.startsWith('!waveby')).length, 1);
+    assert.equal(commands.filter(command => command.targetCarIdx != null).length, 1);
     now += 1; controller.updateContext(packed);
-    assert.equal(commands.filter(command => command.text.startsWith('!waveby')).length, 2);
+    assert.equal(commands.filter(command => command.targetCarIdx != null).length, 2);
 });
 
 test('native yellow automatic waves can recognise a stable pack without Code 80 pace', () => {
@@ -139,7 +139,7 @@ test('native yellow exposes exact pace-lap commands', () => {
     assert.ok(commands.some(command => command.text === '!pacelaps -1'));
     assert.ok(commands.some(command => command.text === '!pacelaps +2'));
     controller.cancel(); controller.deploy('code80-bunch');
-    assert.throws(() => controller.adjustPaceLaps(1), /only during an active iRacing yellow/);
+    assert.throws(() => controller.adjustPaceLaps(1), /after.*activated/);
 });
 
 test('native yellow defers pace and order enforcement to iRacing', () => {
@@ -155,7 +155,7 @@ test('saved schedule is generated at controller startup and reconfiguration rese
     assert.deepEqual(controller.schedule, [10, 20]);
     controller.noteNativeYellow();
     assert.equal(controller.scheduleStatus()[0].called, true);
-    controller.configure({ outputArmed: true });
+    controller.configure({ speedToleranceKph: 5 });
     assert.equal(controller.scheduleStatus()[0].called, true);
     controller.configure({ schedule: { manualPoints: [12, 18] } });
     assert.deepEqual(controller.scheduleStatus(), [{ index: 0, point: 12, called: false }, { index: 1, point: 18, called: false }]);

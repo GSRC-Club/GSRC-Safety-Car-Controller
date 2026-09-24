@@ -47,11 +47,11 @@ class RecordedTraceRunner {
 function redactFrame(context, at) {
     return { schemaVersion: 1, at, context: {
         connected: !!context.connected, simulated: false, stale: !!context.stale, isRace: !!context.isRace,
-        sessionState: context.sessionState, replayLive: context.replayLive, replayFrameGap: context.replayFrameGap,
+        sessionState: context.sessionState, sessionFlags: context.sessionFlags, hasAI: !!context.hasAI, replayLive: context.replayLive, replayFrameGap: context.replayFrameGap,
         sessionIdentity: context.sessionIdentity || null, trackLengthM: context.trackLengthM,
         sessionTime: context.sessionTime, leaderLap: context.leaderLap, paceCarLapDistPct: context.paceCarLapDistPct,
         drivers: (context.drivers || []).map(driver => ({
-            carIdx: driver.carIdx, carNumber: driver.carNumber, lap: driver.lap, lapCompleted: driver.lapCompleted,
+            carIdx: driver.carIdx, carNumber: driver.carNumber, isAI: !!driver.isAI, lap: driver.lap, lapCompleted: driver.lapCompleted,
             lapDistPct: driver.lapDistPct, speedKph: driver.speedKph, onPitRoad: !!driver.onPitRoad,
             surface: driver.surface, inWorld: driver.inWorld !== false,
         })),

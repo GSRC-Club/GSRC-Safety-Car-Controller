@@ -1,6 +1,7 @@
 'use strict';
 
 const YAML = require('yaml');
+const { randomUUID } = require('node:crypto');
 const { shared } = require('./shared');
 const { SafetyCarController } = require('./controller');
 const { deriveSpeeds, physicalOrder } = require('./rules');
@@ -25,7 +26,9 @@ class ControllerService {
     constructor({ clipboard, config, log = console, ledger = null, dataDirectory = null, dispatcher = null, traceRecorder = null, traceDirectory = null } = {}) {
         this.log = log;
         this.reader = new IrsdkReader();
-        this.dispatcher = dispatcher || makeDispatcher({ serializeCommands: true }, log, { clipboard });
+        this.dispatcher = dispatcher || makeDispatcher({ serializeCommands: true }, log, { clipboard,
+            canSendChat: request => !this.simulation && !!this.controller?.config.outputArmed && !this.controller.interlock && (!request?.value?.procedureId || request.value.procedureId === this.controller.procedureId) && evaluateLiveAuthority(this.controller.context, this.controller.boundSessionIdentity).outputAllowed,
+        });
         this.ledger = ledger || (dataDirectory ? new OperationLedger({ directory: dataDirectory }) : null);
         this.controller = new SafetyCarController(config, { ledger: this.ledger });
         this.traceRecorder = traceRecorder || (traceDirectory ? new TelemetryTraceRecorder({ directory: traceDirectory }) : null);
@@ -43,6 +46,8 @@ class ControllerService {
         this.paceCarIdx = null;
         this.paceYaml = null;
         this.lastSessionIdentity = null;
+        this.connectionToken = randomUUID();
+        this.lastSessionTime = null;
         this.timer = null;
         this.dispatching = new Set();
         this.commandQueue = Promise.resolve();
@@ -78,11 +83,17 @@ class ControllerService {
         }
         try {
             if (!this.reader.view && !this.reader.open()) return this._publishDisconnected();
+            if (!this.reader.isConnected()) { this.reader.close(); return this._publishDisconnected(); }
+            if (this.lastFrameAt && Date.now() - this.lastFrameAt > 1500) {
+                this.connectionToken = randomUUID(); this.lastTick = -1; this.lastSessionRead = 0;
+                this.controller.updateContext({ stale: true });
+            }
             const frame = this.reader.readFrame(TELEMETRY, this.lastTick);
             if (frame) {
+                if (this.lastSessionTime != null && frame.values.SessionTime < this.lastSessionTime - 1) this.connectionToken = randomUUID();
+                this.lastSessionTime = frame.values.SessionTime;
                 this.lastTick = frame.tick; this.lastFrameAt = Date.now(); this.telemetry = frame.values;
                 this.dispatcher.updateTelemetry(frame.values);
-                this._observeSessionFlags(frame.values.SessionFlags);
             }
             if (Date.now() - this.lastSessionRead >= 1000) {
                 this.lastSessionRead = Date.now(); this.reader.lastSessionInfoUpdate = -1;
@@ -90,12 +101,17 @@ class ControllerService {
                 if (yaml) {
                     const parsed = parseSessionInfo(yaml, this.log);
                     if (!parsed.error) {
-                        this.session = parsed; this.dispatcher.updateSession(parsed); this._resetSessionScopedStateIfChanged(sessionIdentity(parsed, this.telemetry.SessionNum)); this._readIncidents(parsed);
+                        this.session = parsed; this.dispatcher.updateSession(parsed);
                         if (yaml !== this.paceYaml) { this.paceYaml = yaml; this.paceCarIdx = paceCarIdxFromYaml(yaml); }
                     }
                 }
             }
-            if (frame || Date.now() - this.lastContextAt > 1000) { this.lastContextAt = Date.now(); const context = this._context(); this.traceRecorder?.record(context); this.controller.updateContext(context); }
+            if (frame || Date.now() - this.lastContextAt > 1000) {
+                this.lastContextAt = Date.now(); const context = this._context();
+                this.traceRecorder?.record(context); this.controller.updateContext(context);
+                this._observeSessionFlags(this.telemetry.SessionFlags);
+                if (this.session && evaluateLiveAuthority(context).ok) this._readIncidents(this.session);
+            }
         } catch (error) {
             this.log.warn?.(`iRacing poll: ${error.message}`);
             try { this.reader.close(); } catch (_) {}
@@ -105,10 +121,12 @@ class ControllerService {
     _context() {
         const roster = this.session?.driverInfo?.drivers || [];
         const t = this.telemetry;
+        const identity = sessionIdentity(this.session, t.SessionNum, this.connectionToken);
+        this._resetSessionScopedStateIfChanged(identity);
         const rawDrivers = roster.map(d => {
             const idx = d.carIdx;
             return {
-                carIdx: idx, carNumber: d.carNumber, name: d.userName, carClassID: d.carClassID,
+                carIdx: idx, carNumber: d.carNumber, name: d.userName, carClassID: d.carClassID, isAI: d.isAI,
                 position: t.CarIdxPosition?.[idx] || null,
                 lap: t.CarIdxLap?.[idx] || 0,
                 lapCompleted: t.CarIdxLapCompleted?.[idx] || 0,
@@ -119,14 +137,12 @@ class ControllerService {
             };
         });
         const now = Date.now();
-        const dt = this.lastDriverAt ? (now - this.lastDriverAt) / 1000 : null;
+        const dt = this.lastDriverAt != null ? Number(t.SessionTime) - this.lastDriverAt : null;
         const speeds = deriveSpeeds(this.previousDrivers, rawDrivers, this.session?.weekendInfo?.trackLengthM, dt);
-        const drivers = rawDrivers.map(d => ({ ...d, speedKph: speeds.get(d.carIdx) ?? this.previousDrivers.get(d.carIdx)?.speedKph ?? null }));
-        this.previousDrivers = new Map(drivers.map(d => [d.carIdx, d])); this.lastDriverAt = now;
+        const drivers = rawDrivers.map(d => ({ ...d, speedKph: speeds.get(d.carIdx) ?? null }));
+        this.previousDrivers = new Map(drivers.map(d => [d.carIdx, d])); this.lastDriverAt = Number(t.SessionTime);
         const leader = physicalOrder(drivers)[0];
         const currentSession = currentSessionFromTelemetry(this.session, t.SessionNum);
-        const identity = sessionIdentity(this.session, t.SessionNum);
-        this._resetSessionScopedStateIfChanged(identity);
         return {
             connected: !!this.reader.view, simulated: false,
             stale: !this.lastFrameAt || now - this.lastFrameAt > 1500,
@@ -141,7 +157,9 @@ class ControllerService {
             telemetryTick: this.lastTick,
             frameAt: this.lastFrameAt || null,
             sessionIdentity: identity,
-            replayLive: replayIsLive(t.ReplayFrameNum, t.ReplayFrameNumEnd),
+            hasAI: roster.some(d => d.isAI),
+            incidentDataAvailable: roster.filter(d => !d.isAI).every(d => d.teamIncidentCount != null || d.curDriverIncidentCount != null),
+            replayLive: this.session?.weekendInfo?.simMode !== 'replay' && replayIsLive(t.ReplayFrameNum, t.ReplayFrameNumEnd),
             replayFrameGap: replayFrameGap(t.ReplayFrameNum, t.ReplayFrameNumEnd),
             paceCarLapDistPct: Number.isInteger(this.paceCarIdx) ? t.CarIdxLapDistPct?.[this.paceCarIdx] : null,
             drivers,
@@ -170,7 +188,12 @@ class ControllerService {
         if (this.cautionActive === false && cautionActive) this.controller.noteNativeYellow();
         this.cautionActive = cautionActive;
     }
-    _publishDisconnected() { this.controller.updateContext({ connected: false, simulated: false, stale: true, isRace: false, drivers: [] }); }
+    _publishDisconnected() {
+        this.connectionToken = randomUUID(); this.lastSessionTime = null;
+        this.lastTick = -1; this.lastFrameAt = 0; this.lastSessionRead = 0; this.session = null; this.telemetry = {};
+        this.previousDrivers.clear(); this.lastDriverAt = null;
+        this.controller.updateContext({ connected: false, simulated: false, stale: true, isRace: false, drivers: [] });
+    }
     _dispatch(command) {
         this.commandQueue = this.commandQueue.then(() => this._dispatchNow(command)).catch(error => {
             this.log.error?.(`Safety command queue: ${error.message}`);
@@ -179,6 +202,10 @@ class ControllerService {
     }
     async _dispatchNow(command) {
         if (!command.armed) return;
+        if (command.procedureId && command.procedureId !== this.controller.procedureId) {
+            this.controller.recordCommandResult(command.id, { sent: false, reason: 'Procedure ended before queued command was sent.' });
+            return;
+        }
         if (this.simulation || this.controller.context.simulated) {
             this.controller.recordCommandResult(command.id, { sent: false, reason: 'Live command blocked in rehearsal mode.' });
             return;
@@ -204,7 +231,7 @@ class ControllerService {
         }
         this.dispatching.add(command.id);
         try {
-            const result = await this.dispatcher.handle({ type: 'command', command: { type: 'sim-chat', value: { text: command.text } } });
+            const result = await this.dispatcher.handle({ type: 'command', command: { type: 'sim-chat', value: { text: command.text, procedureId: command.procedureId } } });
             if (result?.sent !== true) this.controller.tripLiveInterlock(`iRacing command path failed: ${result?.reason || 'no successful local send result'}`);
             this.controller.recordCommandResult(command.id, result);
         } catch (error) {
@@ -232,15 +259,20 @@ function currentSessionFromTelemetry(session, sessionNum) {
     return session?.sessionInfo?.sessions?.find(item => Number(item.num) === target) || null;
 }
 
-function sessionIdentity(session, sessionNum) {
+function sessionIdentity(session, sessionNum, connectionToken = null) {
     const subSessionId = Number(session?.weekendInfo?.subSessionId);
     const number = Number(sessionNum);
-    return Number.isInteger(subSessionId) && subSessionId > 0 && Number.isInteger(number) && number >= 0 ? `${subSessionId}:${number}` : null;
+    if (sessionNum == null || !Number.isInteger(number) || number < 0) return null;
+    if (Number.isInteger(subSessionId) && subSessionId > 0) return `${subSessionId}:${number}`;
+    if (connectionToken && session?.weekendInfo?.simMode !== 'replay' && session?.driverInfo?.drivers?.some(d => d.isAI)) return `ai:${connectionToken}:${number}`;
+    return null;
 }
 
 function replayFrameGap(frame, end) {
-    const current = Number(frame); const latest = Number(end);
-    return Number.isFinite(current) && Number.isFinite(latest) && latest >= current ? latest - current : null;
+    // ReplayFrameNumEnd already IS the distance from the end, not an absolute endpoint.
+    if (frame == null || end == null) return null;
+    const current = Number(frame); const distance = Number(end);
+    return Number.isFinite(current) && current >= 0 && Number.isFinite(distance) && distance >= 0 ? distance : null;
 }
 
 function replayIsLive(frame, end, toleranceFrames = 180) {

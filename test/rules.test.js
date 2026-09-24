@@ -25,7 +25,7 @@ test('physical order retains a legitimate CarIdx zero competitor', () => {
 });
 
 test('orders lapped wave candidates from the reference point', () => {
-    const drivers = [car(1, 12, .5), car(2, 11, .7), car(3, 10, .55), car(4, 12, .3)];
+    const drivers = [car(1, 12, .5), car(2, 10, .7), car(3, 10, .55), car(4, 12, .3)];
     assert.deepEqual(waveCandidates(drivers, 1, { referencePct: .6 }).map(d => d.carIdx), [3, 2]);
 });
 

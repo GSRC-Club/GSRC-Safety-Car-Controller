@@ -13,6 +13,12 @@ The field map defaults to a bundled Bathurst / Mount Panorama SVG, including the
 
 The application is a clean-room GSRC implementation. It does not copy iCASControl source code.
 
+## 0.2.2 test build
+
+For an **AI race with bots, choose iRacing Yellow**. Bots do not follow Code 80 chat instructions or private messages. Native deployment waits for caution telemetry; native restart requests `!pacelaps 1` and waits for iRacing's green. Local AI sessions without online session IDs are supported while the same connection remains active.
+
+Human Code 80 now sends private leader, correction and wave instructions. Set **Code 80 laps**, use **PACE LAP −1 / +1** to adjust the planned duration, and confirm **WAVES REJOINED** before restarting. These lap controls never automatically force green. Full procedure details and remaining real-session checks are in the [0.2.2 test checklist](docs/TEST-SESSION-0.2.2.md); the [readiness review](research/2026-09-25-READINESS-REVIEW.md) records reproduced defects and recent GitHub comparisons.
+
 ## Independent development
 
 This is the canonical standalone repository, extracted from the GSRC monorepo on 13 September 2026. Node.js 22.12 or newer is required. The iRacing adapters, branding and licence are included locally; neither relay nor the central server is required to install, test or package it. See [source provenance](docs/PROVENANCE.md) and [current work](progress.md).
@@ -42,22 +48,22 @@ The app reads iRacing's local shared-memory SDK and writes administrator command
 
 Automatic penalties are deliberately fail-closed:
 
-- order is captured from lap-completed plus lap-distance telemetry;
+- physical road order is locked relative to the leader, including lapped cars;
 - speed uses consecutive lap-distance samples and the reported track length;
 - the leader's lower bunch-up target is enforced separately from the field's 80 km/h maximum;
 - a driver gets a warning and correction window first;
 - penalties are queued during the neutralised period and issued after green;
 - telemetry disconnects or stale frames block a new deployment;
 - disconnect/rejoin and pit-exit grace suppress transient order changes;
-- a wave-around instruction is announced only after its `!waveby` send succeeds;
+- native waves use `!waveby`; virtual Code 80 waves privately instruct physical circulation and require rejoin confirmation;
 - a failed local send disarms and freezes every later queued command;
-- physics-inferred incidents may alert, but only confirmed per-car 4x deltas may auto-deploy.
+- automatic incident triggers require available per-car incident totals; missing bot totals cannot trigger a reliable automatic call.
 
 The local operation ledger is append-only and hash-chained. It records decisions, commands and local send results before export, and its recovery snapshot is separately checksummed before use. A name-redacted telemetry trace is captured at 2 Hz for deterministic regression replay; it never records chat text, credentials or driver names, stops at 50 MB per session and stops globally at 250 MB rather than silently consuming the disk.
 
 ## Audio
 
-The included voice pack is generated locally from Windows speech synthesis. Common phrases are pre-rendered. Dynamic announcements are rendered as complete sentences and cached, so “You are waved around number `123`” is spoken naturally as “you are waved around number one two three” rather than concatenating files with fixed silence.
+Public announcements are rendered from their current text with Windows speech synthesis and cached. Private driver instructions stay in text chat so radio output does not broadcast a private warning to the whole field. The historical pre-rendered voice pack remains bundled but is not used for configurable instructions.
 
 To broadcast audio through iRacing:
 

@@ -39,6 +39,8 @@
         <label><span>Tolerance</span><div class="unit-input"><input id="speed-tolerance" type="number" min="0" max="20" value="4"><em>km/h</em></div></label>
         <label><span>Correction time</span><div class="unit-input"><input id="correction-time" type="number" min="5" max="120" value="30"><em>sec</em></div></label>
         <label><span>Penalty</span><select id="penalty"><option value="D">Drive-through</option><option value="0">Stop & go</option><option value="10">10 sec hold</option><option value="30">30 sec hold</option></select></label>
+        <label><span>Code 80 laps</span><input id="code80-laps" type="number" min="1" max="20" value="2"></label>
+        <p class="rule-note">Leader lap crossings to planned restart. Release still requires Race Control. AI races must use iRacing Yellow.</p>
       </section>
 
       <details class="group" open>
@@ -122,8 +124,9 @@
         <button data-action="one-to-green"><span>ONE TO GREEN</span><small>Prepare restart order</small></button>
         <button data-action="restart"><span>ARM RESTART</span><small>Lock order at control line</small></button>
         <button data-action="green" class="green"><span>FORCE GREEN</span><small>Issue queued penalties</small></button>
-        <button data-action="pace-laps" data-delta="-1"><span>PACE LAP −1</span><small>Shorten native yellow</small></button>
-        <button data-action="pace-laps" data-delta="1"><span>PACE LAP +1</span><small>Extend native yellow</small></button>
+        <button data-action="pace-laps" data-delta="-1"><span>PACE LAP −1</span><small>Shorten yellow / Code 80</small></button>
+        <button data-action="pace-laps" data-delta="1"><span>PACE LAP +1</span><small>Extend yellow / Code 80</small></button>
+        <button data-action="waves-complete"><span>WAVES REJOINED</span><small>Confirm all released cars are back</small></button>
       </section>
 
       <section class="track-panel panel">

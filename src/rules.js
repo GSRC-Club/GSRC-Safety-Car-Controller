@@ -17,27 +17,31 @@ function physicalOrder(drivers) {
 }
 
 function lockOrder(drivers, now = Date.now()) {
+    const order = physicalOrder(drivers).filter(d => !d.onPitRoad && Number.isFinite(d.lapDistPct) && d.lapDistPct >= 0);
+    const leader = order[0];
+    if (leader) order.sort((a, b) => wrappedBackward(leader.lapDistPct, a.lapDistPct) - wrappedBackward(leader.lapDistPct, b.lapDistPct));
     return {
         capturedAt: now,
-        entries: physicalOrder(drivers).map((d, index) => ({
+        entries: order.map((d, index) => ({
             carIdx: d.carIdx,
             carNumber: String(d.carNumber || ''),
             name: d.name || d.userName || `Car ${d.carIdx}`,
             position: index,
             distance: raceDistance(d),
+            orderDistance: raceDistance(leader) - wrappedBackward(leader.lapDistPct, d.lapDistPct),
             lapCompleted: Number(d.lapCompleted || 0),
         })),
     };
 }
 
-function orderIndex(lock) {
-    return new Map((lock?.entries || []).map((entry, index) => [entry.carIdx, index]));
-}
-
 function detectIllegalPasses(lock, drivers, exemptions = new Set()) {
     if (!lock?.entries?.length) return [];
-    const original = orderIndex(lock);
-    const current = physicalOrder(drivers).filter(d => original.has(d.carIdx));
+    const captured = new Map(lock.entries.map(entry => [entry.carIdx, entry]));
+    const active = physicalOrder(drivers).filter(d => captured.has(d.carIdx) && !exemptions.has(d.carIdx));
+    const activeIds = new Set(active.map(d => d.carIdx));
+    const original = new Map(lock.entries.filter(e => activeIds.has(e.carIdx)).map((e, index) => [e.carIdx, index]));
+    const distance = d => { const entry = captured.get(d.carIdx); return raceDistance(d) - entry.distance + (entry.orderDistance ?? entry.distance); };
+    const current = active.sort((a, b) => distance(b) - distance(a) || original.get(a.carIdx) - original.get(b.carIdx));
     const currentIndex = new Map(current.map((d, index) => [d.carIdx, index]));
     const violations = [];
     for (const car of current) {
@@ -65,9 +69,11 @@ function deriveSpeeds(previous, drivers, trackLengthM, dtSeconds) {
     for (const driver of drivers || []) {
         const was = previous.get(driver.carIdx);
         if (!was || !Number.isFinite(was.lapDistPct) || !Number.isFinite(driver.lapDistPct)) continue;
+        if (was.inWorld === false || driver.inWorld === false || was.lapDistPct < 0 || was.lapDistPct >= 1 || driver.lapDistPct < 0 || driver.lapDistPct >= 1) continue;
         let delta = wrappedForward(was.lapDistPct, driver.lapDistPct);
         if (delta > 0.15) continue;
-        out.set(driver.carIdx, (delta * trackLengthM / dtSeconds) * 3.6);
+        const speed = (delta * trackLengthM / dtSeconds) * 3.6;
+        if (speed <= 450) out.set(driver.carIdx, speed);
     }
     return out;
 }
@@ -76,10 +82,9 @@ function waveCandidates(drivers, leaderCarIdx, options = {}) {
     const order = physicalOrder(drivers);
     const leader = order.find(d => d.carIdx === leaderCarIdx) || order[0];
     if (!leader) return [];
-    const leaderLap = Number(leader.lapCompleted || 0);
     const referencePct = Number.isFinite(options.referencePct) ? options.referencePct : leader.lapDistPct;
     return order
-        .filter(d => d.carIdx !== leader.carIdx && leaderLap - Number(d.lapCompleted || 0) >= 1)
+        .filter(d => !d.onPitRoad && Number.isFinite(d.lapDistPct) && d.lapDistPct >= 0 && d.carIdx !== leader.carIdx && raceDistance(leader) - raceDistance(d) >= 1)
         .map(d => ({ ...d, distanceFromReference: wrappedBackward(referencePct, d.lapDistPct) }))
         .sort((a, b) => a.distanceFromReference - b.distanceFromReference || a.carIdx - b.carIdx);
 }

@@ -320,46 +320,46 @@ function initKeys(log) {
         const user32 = koffi.load('user32.dll');
 
         // Find iRacing's main window. iRacing's render window class is "SimWinClass"
-        // (window title "iRacing.com Simulator"). Try the class first, then the title,
-        // then a NULL/foreground fallback so a class/title rename still injects to
-        // whatever is focused (the operator can click iRacing first).
+        // (window title "iRacing.com Simulator"). Never inject into another app.
         const FindWindowW = user32.func('void* __stdcall FindWindowW(str16 lpClassName, str16 lpWindowName)');
         const SetForegroundWindow = user32.func('bool __stdcall SetForegroundWindow(void* hWnd)');
+        const GetForegroundWindow = user32.func('void* __stdcall GetForegroundWindow()');
         // UINT SendInput(UINT cInputs, LPINPUT pInputs, int cbSize). INPUT is a tagged
         // union; for keyboard the layout is { DWORD type; KEYBDINPUT ki; } and on x64
         // the struct is 40 bytes (type+pad 8, then KEYBDINPUT 24, + tail pad). We build
         // the byte buffer by hand to avoid a fragile koffi struct definition.
         const SendInput = user32.func('uint32 __stdcall SendInput(uint32 cInputs, void* pInputs, int cbSize)');
-        // keybd_event is the simpler, legacy path and is plenty for our short combos.
-        // VOID keybd_event(BYTE vk, BYTE scan, DWORD flags, ULONG_PTR extra)
-        const keybd_event = user32.func('void __stdcall keybd_event(uint8 bVk, uint8 bScan, uint32 dwFlags, uintptr_t dwExtraInfo);');
-
         const KEYEVENTF_KEYUP = 0x0002;
-        let hwnd = FindWindowW('SimWinClass', null);
-        if (!hwnd) hwnd = FindWindowW(null, 'iRacing.com Simulator');
 
         _keyState = {
             ready: true,
             fns: {
                 focusSim() {
-                    // Re-find each time (the window may have opened after init) and
-                    // raise it; a falsy hwnd just means "inject to whatever is focused".
-                    let h = hwnd || FindWindowW('SimWinClass', null) || FindWindowW(null, 'iRacing.com Simulator');
+                    // Re-find each time and verify focus before sending any input.
+                    let h = FindWindowW('SimWinClass', null) || FindWindowW(null, 'iRacing.com Simulator');
                     if (h) { try { SetForegroundWindow(h); } catch (_) {} }
-                    return !!h;
+                    const foreground = GetForegroundWindow();
+                    return !!h && !!foreground && koffi.address(h) === koffi.address(foreground);
                 },
-                // Press a parsed combo via keybd_event: modifiers down → key down →
+                // Press a parsed combo via SendInput: modifiers down → key down →
                 // key up → modifiers up (reverse order on the way up).
                 press(modifiers, key) {
-                    for (const m of modifiers) keybd_event(m & 0xff, 0, 0, 0);
-                    keybd_event(key & 0xff, 0, 0, 0);
-                    keybd_event(key & 0xff, 0, KEYEVENTF_KEYUP, 0);
-                    for (let i = modifiers.length - 1; i >= 0; i--) keybd_event(modifiers[i] & 0xff, 0, KEYEVENTF_KEYUP, 0);
+                    const events = [...modifiers.map(vk => [vk, 0]), [key, 0], [key, KEYEVENTF_KEYUP], ...[...modifiers].reverse().map(vk => [vk, KEYEVENTF_KEYUP])];
+                    const size = process.arch === 'ia32' ? 28 : 40;
+                    const offset = process.arch === 'ia32' ? 4 : 8;
+                    const buffer = Buffer.alloc(size * events.length);
+                    events.forEach(([vk, flags], index) => {
+                        const start = index * size;
+                        buffer.writeUInt32LE(1, start); // INPUT_KEYBOARD
+                        buffer.writeUInt16LE(vk, start + offset);
+                        buffer.writeUInt32LE(flags, start + offset + 4);
+                    });
+                    return SendInput(events.length, buffer, size) === events.length;
                 },
             },
         };
         _keyInitFailShouted = false;
-        if (log && log.info) log.info('sim-key keyboard-injection path ready (user32 keybd_event) — director SPACE / CTRL+R enabled.');
+        if (log && log.info) log.info('sim-key keyboard-injection path ready (user32 SendInput, verified simulator focus).');
         return true;
     } catch (e) {
         if (!_keyInitFailShouted) {
@@ -385,9 +385,8 @@ function sendKeys(combo, log) {
     }
     if (!initKeys(log)) return false;
     try {
-        _keyState.fns.focusSim();
-        _keyState.fns.press(parsed.modifiers, parsed.key);
-        return true;
+        if (!_keyState.fns.focusSim()) return false;
+        return _keyState.fns.press(parsed.modifiers, parsed.key);
     } catch (e) {
         if (log && log.warn) log.warn(`sim-key send error for "${parsed.raw}": ${e.message}`);
         return false;

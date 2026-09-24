@@ -265,7 +265,7 @@ function makeDispatcher(config = {}, log = console, deps = {}) {
     // chat key), then ctrl+v + enter via key injection. deps.clipboard is Electron's
     // clipboard from relay-runner; absent on a headless relay → skipped, never throws.
     const clip = deps.clipboard || null;
-    const wait = sleep;
+    const wait = deps.sleep || sleep;
     async function handleSimChat(c) {
         const text = String((((c && c.value) || {}).text) || '').trim();
         if (!text) { log.warn && log.warn('sim-chat: missing/empty value.text — ignored (no-op)'); return false; }
@@ -278,19 +278,22 @@ function makeDispatcher(config = {}, log = console, deps = {}) {
             return false;
         }
         try {
+            if (deps.canSendChat && !deps.canSendChat(c)) return false;
             clip.writeText(text);
             if (cmd.init && cmd.init(log) && typeof cmd.chatCommand === 'function') {
-                cmd.chatCommand(1); // BeginChat — the SDK opens the chat box, focus-free
+                if (cmd.chatCommand(1) !== true) return false;
             } else {
-                keySender('t');     // fallback: iRacing's default chat-open key
+                if (keySender('t') !== true) return false;
             }
             const gap = stepMs > 0 ? stepMs : 90;
             await wait(gap * 3);    // let the chat box open before pasting
-            keySender('ctrl+v');
+            if (deps.canSendChat && !deps.canSendChat(c)) { keySender('escape'); return false; }
+            if (keySender('ctrl+a') !== true || keySender('ctrl+v') !== true) return false;
             await wait(gap);
+            if (deps.canSendChat && !deps.canSendChat(c)) { keySender('escape'); return false; }
             const sent = keySender('enter');
             log.info && log.info(`sim-chat → pasted + sent ${text.length} chars to iRacing chat${sent ? '' : ' (enter no-op — check key injection)'}`);
-            return true;
+            return sent === true;
         } catch (e) {
             log.warn && log.warn(`sim-chat dispatch error: ${e.message}`);
             return false;

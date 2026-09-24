@@ -1,5 +1,16 @@
 # GSRC Safety Car Controller progress
 
+## 2026-09-25 — AI race readiness and Code 80 corrections (0.2.2)
+
+- [x] Reproduce and fix live-replay authority, local AI identity, private chat routing and false local-send success. Detect AI rosters and explain the required native-yellow procedure.
+- [x] Follow native caution/green telemetry with a missing-yellow timeout; preserve session interlocks, serialized output, replay blocking, recovery and disarmed defaults.
+- [x] Correct virtual/native wave separation, spacing, rejoin confirmation, physical order across lap classes, and waved-car speed/restart exemptions. Add Code 80 duration and +/- lap controls, private leader/restart/correction instructions, and current-text audio with authority checks.
+- [x] Compare public projects with verified July 25–September 25 activity; document recent Better Caution Bot and iCASControl evidence and licence boundaries in the [review](research/2026-09-25-READINESS-REVIEW.md).
+- [x] Build the signed 0.2.2 Windows installer and write the [test-session checklist](docs/TEST-SESSION-0.2.2.md).
+- Verification: clean `npm ci` (zero audit vulnerabilities), 69/69 tests (18 new cases), syntax checks on 30 JavaScript files, `git diff --check`, pinned/timestamped NSIS build. Electron source rehearsal at 1720×980 and source/packaged-ASAR workflow at 1440×900 verified countdown, leader DM, virtual wave DM, blocked premature restart, confirmed rejoin, +/- laps and restart with output disarmed. Screenshots reviewed.
+- Build/evidence: `Y:\GSRC-Safety-Car-Controller-builds\0.2.2`. Installer SHA-256 `AA4F9D4099DA20A17A461A65C502417E22574D0FCF308C3EA212A5A67C7D0B7A`.
+- Environment: Windows development, synthetic SDK frames and isolated Electron rehearsal profiles. No running iRacing simulator was available; real AI response, admin acceptance, full-field speed calibration, voice routing and driver receipt remain acceptance gates. No NUC/NAS application or production deployment; installer prepared locally for the requested test.
+
 ## 2026-09-13 — Independent repository and Bathurst default (0.2.1)
 
 - [x] Locate the existing 0.2.0 controller, original handoffs and preserved signed installer.

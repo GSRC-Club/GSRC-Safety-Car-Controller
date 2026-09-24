@@ -69,9 +69,10 @@ test('rehearsal commands are structurally incapable of becoming armed', () => {
 
 test('failed live wave command returns the car to eligibility and permits one deliberate retry', () => {
     const commands = [];
-    const controller = new SafetyCarController({ outputArmed: true }, { now: () => 1000 });
+    let now = 1000;
+    const controller = new SafetyCarController({ outputArmed: true }, { now: () => now });
     controller.on('command', command => commands.push(command));
-    controller.updateContext(liveContext()); controller.deploy('manual-driver'); controller.markPackReady();
+    controller.updateContext(liveContext({ sessionFlags: 0x4000 })); controller.deploy('native'); controller.markPackReady();
     controller.issueWave(3);
     const first = commands.find(command => command.text.startsWith('!waveby'));
     assert(first?.armed);
@@ -80,7 +81,7 @@ test('failed live wave command returns the car to eligibility and permits one de
     controller.recordCommandResult(first.id, { sent: false, reason: 'clipboard unavailable' });
     assert.equal(commands.some(command => command.text.includes('WAVE-AROUND AUTHORIZED')), false);
     assert.equal(controller.snapshot().waveQueue.some(driver => driver.carIdx === 3), true);
-    controller.issueWave(3);
+    now += 5000; controller.issueWave(3);
     assert.equal(commands.filter(command => command.text.startsWith('!waveby')).length, 2);
 });
 
@@ -88,7 +89,7 @@ test('live wave announcement is released only after the administrator wave comma
     const commands = [];
     const controller = new SafetyCarController({ outputArmed: true }, { now: () => 1000 });
     controller.on('command', command => commands.push(command));
-    controller.updateContext(liveContext()); controller.deploy('manual-driver'); controller.markPackReady();
+    controller.updateContext(liveContext({ sessionFlags: 0x4000 })); controller.deploy('native'); controller.markPackReady();
     controller.issueWave(3);
     const wave = commands.find(command => command.text.startsWith('!waveby'));
     assert.equal(commands.some(command => command.text.includes('WAVE-AROUND AUTHORIZED')), false);

@@ -129,9 +129,10 @@ function parseSessionInfo(yamlText, log) {
         })
         .map(d => ({
             carIdx: Number(d.CarIdx),
+            isAI: Number(d.CarIsAI) === 1,
             userName: d.UserName || '',
             userID: Number(d.UserID) || 0,
-            carNumber: String(d.CarNumber || '').replace(/"/g, ''),
+            carNumber: String(d.CarNumber ?? '').replace(/"/g, ''),
             // CarNumberRaw is the pre-encoded integer iRacing wants in CamSwitchNum
             // (it already accounts for significant leading zeros). When present the
             // dispatcher uses it directly and skips padCarNum.

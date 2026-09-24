@@ -34,6 +34,10 @@ class SafetyCarController extends EventEmitter {
         this.lastLeaderPct = null;
         this.packStableSince = null;
         this.packReady = false;
+        this.code80TargetLap = null;
+        this.nativeYellowSeen = false;
+        this.nativeRequestedAt = null;
+        this.wavesComplete = false;
         this.context = emptyContext();
         this.audit = [];
         this.schedule = generateSchedule(this.config.schedule, this.random);
@@ -57,6 +61,9 @@ class SafetyCarController extends EventEmitter {
     configure(patch) {
         if (ACTIVE_PHASES.has(this.phase) || this.recoveryRequired) throw new Error('End or resolve the active safety-car procedure before changing its rules.');
         const nextConfig = mergeConfig(this.config, patch || {});
+        if (!(nextConfig.speedLimitKph >= 40 && nextConfig.speedLimitKph <= 160) || !(nextConfig.leaderGatherKph >= 40 && nextConfig.leaderGatherKph <= nextConfig.speedLimitKph)) throw new Error('Choose a field limit of 40–160 km/h and a leader target between 40 and the field limit.');
+        if (!Number.isInteger(nextConfig.code80Laps) || nextConfig.code80Laps < 1 || nextConfig.code80Laps > 20) throw new Error('Code 80 duration must be 1–20 laps.');
+        if (nextConfig.outputArmed && !this.config.outputArmed) this.setOutputArmed(true);
         const scheduleChanged = JSON.stringify(this.config.schedule) !== JSON.stringify(nextConfig.schedule);
         this.config = nextConfig;
         this.procedure = this.config.procedure;
@@ -72,6 +79,9 @@ class SafetyCarController extends EventEmitter {
     }
 
     updateContext(context) {
+        if (context?.sessionIdentity && this.context.sessionIdentity && context.sessionIdentity !== this.context.sessionIdentity && !ACTIVE_PHASES.has(this.phase) && !this.recoveryRequired) {
+            this.scheduleCalled.clear(); this.nativeYellowCount = 0; this.incidents.reset(); this.continuity.reset();
+        }
         this.context = { ...this.context, ...(context || {}) };
         this.continuity.update(this.context.drivers, this.now());
         this._tick();
@@ -81,6 +91,9 @@ class SafetyCarController extends EventEmitter {
     deploy(procedure = this.config.procedure, reason = 'Race Control') {
         if (ACTIVE_PHASES.has(this.phase) || this.recoveryRequired) throw new Error('A safety-car procedure is already active or requires recovery.');
         this._requireRaceContext();
+        if (!['native', 'manual-driver', 'code80-bunch', 'code80-strict'].includes(procedure)) throw new Error('Select a supported deployment procedure.');
+        if (!this.context.simulated && this.context.hasAI && procedure !== 'native') throw new Error('AI drivers cannot follow chat-only Code 80 or human safety-car instructions. Select iRacing Yellow for an AI race.');
+        this.penalties = [];
         this.procedure = procedure;
         this.procedureId = `${this.context.sessionIdentity || 'rehearsal'}:${this.now()}`;
         this.boundSessionIdentity = this.context.sessionIdentity || null;
@@ -89,22 +102,23 @@ class SafetyCarController extends EventEmitter {
         this.interlock = null;
         const label = procedureLabel(procedure);
         if (procedure === 'native') {
+            this.nativeRequestedAt = this.now();
+            this.nativeYellowSeen = !!(Number(this.context.sessionFlags) & 0xc000);
             this.phase = 'controlled';
             this.orderLock = lockOrder(this.context.drivers, this.now());
             this._command('chat', '!yellow GSRC SAFETY CAR DEPLOYED');
-            this._command('chat', '!pitclose');
-            this._announce(`SAFETY CAR DEPLOYED — ${reason}. PITS CLOSED. FOLLOW iRACING PACE INSTRUCTIONS.`, 'deploy-native');
+            this._announce(`SAFETY CAR REQUESTED — ${reason}. FOLLOW iRACING PACE AND PIT INSTRUCTIONS.`, 'deploy-native');
         } else if (procedure === 'manual-driver') {
             this.phase = 'gathering';
             this.orderLock = lockOrder(this.context.drivers, this.now());
             this._command('chat', '!pitclose');
-            this._announce(`GSRC SAFETY CAR DEPLOYED — ${reason}. SAFETY CAR DRIVER: LEAVE PIT LANE. FIELD: 80 KM/H, NO OVERTAKING.`, 'deploy-manual');
+            this._announce(`GSRC SAFETY CAR DEPLOYED — ${reason}. SAFETY CAR DRIVER: LEAVE PIT LANE. FIELD: ${this.config.speedLimitKph} KM/H, NO OVERTAKING.`, 'deploy-manual');
         } else {
             this.phase = 'countdown';
             this.countdownEndsAt = this.now() + this.config.countdownSeconds * 1000;
             this._command('chat', '!pitclose');
             const strict = procedure === 'code80-strict';
-            this._announce(`${strict ? 'STRICT CODE 80' : 'GSRC CODE 80 SAFETY CAR'} DEPLOYING IN ${this.config.countdownSeconds} SECONDS — LIFT NOW — LIMIT 80 KM/H — NO OVERTAKING.`, 'deploy-code80');
+            this._announce(`${strict ? 'STRICT CODE 80' : 'GSRC CODE 80 SAFETY CAR'} DEPLOYING IN ${this.config.countdownSeconds} SECONDS — LIFT NOW — LIMIT ${this.config.speedLimitKph} KM/H — NO OVERTAKING.`, 'deploy-code80');
         }
         this._record('deployed', { procedure, reason, label });
         this._publish();
@@ -113,15 +127,18 @@ class SafetyCarController extends EventEmitter {
 
     cancel(reason = 'Cancelled by Race Control') {
         if (this.phase === 'idle') return this.snapshot();
-        this._announce(`SAFETY CAR PROCEDURE CANCELLED — ${reason}. REMAIN UNDER RACE CONTROL INSTRUCTIONS.`, 'cancel');
+        const native = this.procedure === 'native';
         this._record('cancelled', { reason });
         this._resetProcedure();
+        if (!native) this._command('chat', '!pitopen');
+        this._announce(`CONTROLLER PROCEDURE CANCELLED — ${reason}. ${native ? 'iRACING CAUTION REMAINS UNDER SIMULATOR CONTROL.' : 'REMAIN UNDER RACE CONTROL INSTRUCTIONS.'}`, 'cancel');
         this._publish();
         return this.snapshot();
     }
 
     markPackReady() {
         this._requireActiveAuthority();
+        this._requireNativeConfirmation();
         if (!['gathering', 'controlled'].includes(this.phase)) throw new Error('The field is not in a gathering phase.');
         this.packReady = true;
         this.phase = this.config.waveArounds && this.procedure !== 'code80-strict' ? 'wave-arounds' : 'controlled';
@@ -129,10 +146,11 @@ class SafetyCarController extends EventEmitter {
         if (this.phase === 'wave-arounds' && this.config.waveMode === 'automatic' && !this.lastWaveAt) {
             this.lastWaveAt = this.now() - this.config.waveIntervalSeconds * 1000;
         }
-        if (this.config.pitPolicy === 'close-deploy-open-stable') this._command('chat', '!pitopen');
+        if (this.procedure !== 'native' && this.config.pitPolicy === 'close-deploy-open-stable') this._command('chat', '!pitopen');
         this._announce(this.phase === 'wave-arounds'
             ? `FIELD STABLE — WAVE-AROUNDS MAY BEGIN. NO OVERTAKING UNLESS DIRECTED.`
-            : `FIELD STABLE — HOLD 80 KM/H AND MAINTAIN ORDER.`, 'pack-ready');
+            : this.procedure === 'native' ? 'FIELD STABLE — FOLLOW iRACING PACE INSTRUCTIONS.' : `FIELD STABLE — HOLD ${this.config.speedLimitKph} KM/H AND MAINTAIN ORDER.`, 'pack-ready');
+        if (this.procedure === 'code80-bunch') this._announce(`PACK STABLE — LEADER MAY NOW HOLD ${this.config.speedLimitKph} KM/H.`, 'leader-pace', this.orderLock?.entries[0]?.carIdx);
         this._record('pack-ready', { waveCandidates: this.waveQueue.map(d => d.carIdx) });
         this._publish();
         return this.snapshot();
@@ -140,17 +158,22 @@ class SafetyCarController extends EventEmitter {
 
     issueWave(carIdx) {
         this._requireActiveAuthority();
+        this._requireNativeConfirmation();
         if (!this.config.waveArounds) throw new Error('Wave-arounds are disabled.');
         if (this.phase !== 'wave-arounds') throw new Error('Wave-arounds can begin only after the field is marked stable.');
         const candidate = this._refreshWaveQueue().find(d => d.carIdx === Number(carIdx));
         if (!candidate) throw new Error('That car is not currently eligible for a wave-around.');
+        if (this.lastWaveAt && this.now() - this.lastWaveAt < this.config.waveIntervalSeconds * 1000) throw new Error('Wait for the configured spacing before releasing the next car.');
         this.lastWaveAt = this.now();
         const announcement = {
             text: `CAR ${candidate.carNumber}, ${candidate.name}: WAVE-AROUND AUTHORIZED. PASS SAFELY. ALL OTHER CARS HOLD POSITION.`,
             audioCue: 'wave-around', carIdx: candidate.carIdx,
             speechText: `You are waved around number ${speakCarNumber(candidate.carNumber)}. Pass safely and rejoin at the end of the line.`,
         };
-        const waveCommand = this._command('chat', `!waveby #${candidate.carNumber} GSRC WAVE-AROUND — PASS SAFELY AND REJOIN AT END OF LINE`, { commandKey: `wave:${candidate.carIdx}`, targetCarIdx: candidate.carIdx });
+        const waveText = this.procedure === 'native'
+            ? `!waveby #${candidate.carNumber} GSRC WAVE-AROUND — FOLLOW iRACING INSTRUCTIONS`
+            : `/${this._driverNumber(candidate.carIdx)} WAVE-AROUND AUTHORIZED. PASS SAFELY, COMPLETE ONE LAP AND REJOIN AT THE BACK. THEN RESUME ${this.config.speedLimitKph} KM/H.`;
+        const waveCommand = this._command('chat', waveText, { commandKey: `wave:${candidate.carIdx}`, targetCarIdx: candidate.carIdx });
         if (waveCommand?.armed) this.pendingWaves.set(waveCommand.id, { carIdx: candidate.carIdx, announcement, candidate: { carIdx: candidate.carIdx, carNumber: candidate.carNumber, name: candidate.name } });
         else {
             this.waved.add(candidate.carIdx);
@@ -164,10 +187,18 @@ class SafetyCarController extends EventEmitter {
 
     oneToGreen() {
         this._requireActiveAuthority();
+        this._requireNativeConfirmation();
+        if (this.pendingWaves.size || this.procedure !== 'native' && this.waved.size) throw new Error('Confirm wave-around cars have rejoined before calling one-to-green.');
         if (!['controlled', 'wave-arounds', 'gathering'].includes(this.phase)) throw new Error('One-to-green is not available in the current phase.');
         this.phase = 'one-to-green';
+        if (this.procedure === 'native') {
+            this._command('chat', '!pacelaps 1');
+            this._announce('ONE TO GREEN REQUESTED — FOLLOW iRACING PACE AND RESTART INSTRUCTIONS.', 'native-restart');
+            this._publish(); return this.snapshot();
+        }
         this._command('chat', '!pitopen');
         this._announce(`ONE TO GREEN — LEADER CONTROLS PACE. HOLD ORDER. NO OVERTAKING UNTIL THE CONTROL LINE.`, 'one-to-green');
+        this._announce(`HOLD ${this.config.speedLimitKph} KM/H UNTIL RESTART IS ARMED. WAIT FOR RACE CONTROL.`, 'leader-restart', physicalOrder(this.context.drivers)[0]?.carIdx);
         this._record('one-to-green');
         this._publish();
         return this.snapshot();
@@ -175,12 +206,15 @@ class SafetyCarController extends EventEmitter {
 
     beginRestart() {
         this._requireActiveAuthority();
+        if (this.procedure === 'native') throw new Error('iRacing controls the native restart. Wait for its green flag.');
         if (this.phase !== 'one-to-green') throw new Error('Call one-to-green before starting the restart.');
         this.phase = 'restart';
         this.restartLock = lockOrder(this.context.drivers, this.now());
-        const leader = physicalOrder(this.context.drivers)[0];
+        this.waved.clear();
+        const leader = this.context.drivers.find(d => d.carIdx === this.restartLock.entries[0]?.carIdx);
         this.lastLeaderPct = leader?.lapDistPct ?? null;
         this._announce(`RESTART ARMED — LEADER MAY ACCELERATE IN THE RESTART ZONE. NO OVERTAKING BEFORE THE CONTROL LINE.`, 'restart-armed');
+        this._announce('RESTART ARMED — YOU MAY ACCELERATE. NO PASSING UNTIL THE CONTROL LINE.', 'leader-restart', leader?.carIdx);
         this._record('restart-armed', { leaderCarIdx: leader?.carIdx || null });
         this._publish();
         return this.snapshot();
@@ -189,20 +223,45 @@ class SafetyCarController extends EventEmitter {
     forceGreen() {
         if (!ACTIVE_PHASES.has(this.phase) || this.phase === 'green') throw new Error('No releasable safety-car procedure is active.');
         this._requireActiveAuthority();
+        if (this.procedure === 'native') return this.oneToGreen();
+        if (this.pendingWaves.size || this.waved.size) throw new Error('Confirm wave-around cars have rejoined before releasing the race.');
         this._goGreen('operator');
         return this.snapshot();
     }
 
     adjustPaceLaps(delta) {
         this._requireActiveAuthority();
-        if (!ACTIVE_PHASES.has(this.phase) || this.procedure !== 'native') throw new Error('Pace laps can be adjusted only during an active iRacing yellow.');
+        if (!['gathering', 'controlled', 'wave-arounds', 'one-to-green'].includes(this.phase)) throw new Error('Adjust laps after the caution or Code 80 has activated, before restart.');
         const amount = Math.trunc(Number(delta));
         if (!amount || Math.abs(amount) > 10) throw new Error('Pace-lap adjustment must be between -10 and +10.');
-        const signed = amount > 0 ? `+${amount}` : String(amount);
-        this._command('chat', `!pacelaps ${signed}`);
+        if (this.procedure === 'native') {
+            this._requireNativeConfirmation();
+            const signed = amount > 0 ? `+${amount}` : String(amount);
+            this._command('chat', `!pacelaps ${signed}`);
+        } else {
+            if (!this.procedure.startsWith('code80') || this.code80TargetLap == null) throw new Error('Lap controls apply to Code 80 and iRacing Yellow.');
+            this.code80TargetLap = Math.max(this.context.leaderLap + 1, this.code80TargetLap + amount);
+            if (this.phase === 'one-to-green' && amount > 0) this.phase = 'controlled';
+            this._announce(`CODE 80: ${this.code80TargetLap - this.context.leaderLap} LEADER LAP CROSSINGS TO PLANNED RESTART. WAIT FOR RACE CONTROL RELEASE.`, 'laps-adjusted');
+        }
         this._record('pace-laps-adjusted', { delta: amount });
         this._publish();
         return this.snapshot();
+    }
+
+    completeWaves() {
+        this._requireActiveAuthority();
+        if (!['wave-arounds', 'controlled'].includes(this.phase) || this.pendingWaves.size) throw new Error('Wait for wave commands to finish before confirming rejoin.');
+        this.waved.clear(); this.wavesComplete = true;
+        this.orderLock = lockOrder(this.context.drivers, this.now());
+        this.violations.clear(); this.speedCandidates.clear(); this.passCandidates.clear();
+        this.phase = 'controlled';
+        this._announce(this.procedure === 'native' ? 'WAVE-AROUNDS COMPLETE — FOLLOW iRACING PACE INSTRUCTIONS.' : `WAVE-AROUNDS COMPLETE — HOLD ${this.config.speedLimitKph} KM/H AND THE CURRENT ORDER.`, 'waves-complete');
+        this._record('waves-complete'); this._publish(); return this.snapshot();
+    }
+
+    _requireNativeConfirmation() {
+        if (this.procedure === 'native' && !this.context.simulated && !this.nativeYellowSeen) throw new Error('Waiting for iRacing caution telemetry. Check session admin privileges and full-course caution settings.');
     }
 
     noteNativeYellow() {
@@ -251,6 +310,10 @@ class SafetyCarController extends EventEmitter {
             recoveryRequired: this.recoveryRequired,
             recovery: this.recoveryRequired ? recoverySummary(this.recoveryState) : null,
             countdownRemaining: this.countdownEndsAt ? Math.max(0, Math.ceil((this.countdownEndsAt - this.now()) / 1000)) : 0,
+            code80LapsRemaining: this.code80TargetLap == null ? null : Math.max(0, this.code80TargetLap - this.context.leaderLap),
+            nativeYellowSeen: this.nativeYellowSeen,
+            wavesInProgress: this.procedure !== 'native' ? this.waved.size : 0,
+            pendingWaveCount: this.pendingWaves.size,
             config: this.config,
             context: this.context,
             orderLock: this.orderLock,
@@ -273,18 +336,30 @@ class SafetyCarController extends EventEmitter {
             }
             if (this.interlock) { this._publish(); return; }
         }
+        if (this.procedure === 'native' && ACTIVE_PHASES.has(this.phase) && this.phase !== 'green') {
+            const caution = !!(Number(this.context.sessionFlags) & 0xc000);
+            if (caution) this.nativeYellowSeen = true;
+            else if (this.nativeYellowSeen && Number.isInteger(this.context.sessionFlags)) {
+                this._goGreen('iracing-telemetry'); this._publish(); return;
+            }
+            if (!this.context.simulated && !this.nativeYellowSeen && this.config.outputArmed && now - this.nativeRequestedAt > 15000) {
+                this._tripInterlock('iRacing has not confirmed the yellow within 15 seconds. Check admin privileges, full-course caution settings and the in-sim chat response.');
+                this._publish(); return;
+            }
+        }
         if (this.phase === 'countdown' && now >= this.countdownEndsAt) {
             this.countdownEndsAt = null;
             this.orderLock = lockOrder(this.context.drivers, now);
             this.phase = this.procedure === 'code80-strict' ? 'controlled' : 'gathering';
-            this._announce(`${this.procedure === 'code80-strict' ? 'STRICT CODE 80' : 'CODE 80'} ACTIVE — 80 KM/H MAXIMUM — NO OVERTAKING.`, 'code80-active');
+            this.code80TargetLap = this.context.leaderLap + this.config.code80Laps;
+            this._announce(`${this.procedure === 'code80-strict' ? 'STRICT CODE 80' : 'CODE 80'} ACTIVE — ${this.config.speedLimitKph} KM/H MAXIMUM — NO OVERTAKING.`, 'code80-active');
             if (this.procedure === 'code80-bunch') {
                 const leader = physicalOrder(this.context.drivers)[0];
-                this._announce(`LEADER CAR ${leader?.carNumber || ''}: TARGET ${this.config.leaderGatherKph} KM/H UNTIL THE PACK IS STABLE. FIELD MAY RUN UP TO ${this.config.speedLimitKph} KM/H TO CLOSE GAPS.`, 'leader-gather', leader?.carIdx || null);
+                this._announce(`LEADER: TARGET ${this.config.leaderGatherKph} KM/H UNTIL THE PACK IS STABLE. FIELD LIMIT ${this.config.speedLimitKph} KM/H.`, 'leader-gather', leader?.carIdx ?? null);
             }
             this._record('code80-active', { lockedCars: this.orderLock.entries.length });
         }
-        const autoPackEligible = !this.packReady && this.config.waveArounds && this.config.waveMode === 'automatic' && (
+        const autoPackEligible = !this.packReady && this.config.waveArounds && this.config.waveMode === 'automatic' && (this.procedure !== 'native' || this.context.simulated || this.nativeYellowSeen) && (
             this.phase === 'gathering' && ['code80-bunch', 'manual-driver'].includes(this.procedure) ||
             this.phase === 'controlled' && this.procedure === 'native'
         );
@@ -294,6 +369,7 @@ class SafetyCarController extends EventEmitter {
                 if (now - this.packStableSince >= this.config.packStableHoldSeconds * 1000) this.markPackReady();
             } else this.packStableSince = null;
         }
+        if (this.code80TargetLap != null && this.packReady && ['controlled', 'wave-arounds'].includes(this.phase) && !this.waved.size && !this.pendingWaves.size && !this._refreshWaveQueue().length && this.context.leaderLap >= this.code80TargetLap - 1) this.oneToGreen();
         if (['gathering', 'controlled', 'wave-arounds', 'one-to-green'].includes(this.phase)) {
             if (this.procedure !== 'native') this._enforceSpeedAndOrder(now, this.orderLock);
             if (now - this.lastReminderAt >= this.config.announceNoPassingSeconds * 1000) {
@@ -311,7 +387,10 @@ class SafetyCarController extends EventEmitter {
             this._enforceSpeedAndOrder(now, this.restartLock, true);
             const leaderIdx = this.restartLock?.entries?.[0]?.carIdx;
             const leader = (this.context.drivers || []).find(d => d.carIdx === leaderIdx);
-            if (leader && Number.isFinite(this.lastLeaderPct) && this.lastLeaderPct > 0.8 && leader.lapDistPct < 0.2) this._goGreen('control-line');
+            const line = Number(this.config.restartLinePct) || 0;
+            const before = ((this.lastLeaderPct - line) + 1) % 1;
+            const after = ((leader?.lapDistPct - line) + 1) % 1;
+            if (leader?.inWorld !== false && Number.isFinite(this.lastLeaderPct) && before > .8 && after < .2) this._goGreen('control-line');
             this.lastLeaderPct = leader?.lapDistPct ?? this.lastLeaderPct;
         }
         this._checkSchedule();
@@ -337,7 +416,7 @@ class SafetyCarController extends EventEmitter {
         if (!restartOnly) {
             const leaderCarIdx = lock?.entries?.[0]?.carIdx;
             for (const driver of drivers) {
-                if (driver.onPitRoad || driver.inWorld === false) continue;
+                if (driver.onPitRoad || driver.inWorld === false || exempt.has(driver.carIdx) || !Number.isFinite(driver.speedKph)) continue;
                 let details = null;
                 if (driver.speedKph > this.config.speedLimitKph + this.config.speedToleranceKph) {
                     details = { type: 'speeding', carIdx: driver.carIdx, carNumber: driver.carNumber, name: driver.name, speedKph: driver.speedKph, targetKph: this.config.speedLimitKph };
@@ -372,7 +451,7 @@ class SafetyCarController extends EventEmitter {
             item = { ...details, key, firstSeenAt: now, lastSeenAt: now, deadlineAt: now + correctionSeconds * 1000, status: 'warning', penalty };
             this.violations.set(key, item);
             const instruction = details.type === 'illegal-pass'
-                ? immediate ? 'RETURN THE POSITION IMMEDIATELY' : `RETURN THE POSITION WITHIN ${this.config.passCorrectionSeconds} SECONDS`
+                ? `LET CAR ${(details.passedCarIdxs || []).map(idx => this.context.drivers.find(d => d.carIdx === idx)?.carNumber).filter(Boolean).join(', ')} BACK THROUGH ${immediate ? 'IMMEDIATELY' : `WITHIN ${this.config.passCorrectionSeconds} SECONDS`}`
                 : `SLOW TO ${details.targetKph} KM/H NOW`;
             const violationLabel = details.type === 'illegal-pass' ? 'ILLEGAL OVERTAKE'
                 : details.type === 'leader-pace' ? `LEADER GATHER PACE ${Math.round(details.speedKph)} KM/H`
@@ -381,7 +460,10 @@ class SafetyCarController extends EventEmitter {
             this._record('violation-warning', item);
         } else {
             Object.assign(item, details, { lastSeenAt: now });
-            if (item.status === 'corrected') { item.status = 'warning'; item.deadlineAt = now + this.config.passCorrectionSeconds * 1000; }
+            if (item.status === 'corrected') {
+                item.status = 'warning'; item.deadlineAt = now + (immediate ? 0 : this.config.passCorrectionSeconds * 1000);
+                this._announce(`WARNING CAR ${item.carNumber}: ${item.type === 'illegal-pass' ? 'RETURN THE POSITION' : `SLOW TO ${details.targetKph} KM/H`} WITHIN ${immediate ? 0 : this.config.passCorrectionSeconds} SECONDS.`, 'violation-warning', item.carIdx);
+            }
         }
         if (item.status === 'warning' && now >= item.deadlineAt) {
             item.status = 'penalty-queued';
@@ -394,6 +476,7 @@ class SafetyCarController extends EventEmitter {
 
     _goGreen(trigger) {
         this.phase = 'green';
+        if (this.procedure !== 'native') this._command('chat', '!pitopen');
         this._announce('GREEN FLAG — RACING RESUMED. DEFERRED PENALTIES ARE NOW ACTIVE.', 'green');
         for (const penalty of this.penalties.filter(p => p.status === 'deferred-until-green')) {
             const command = this._command('chat', `!black #${penalty.carNumber} ${penalty.penalty}`, { commandKey: `penalty:${penalty.carIdx}:${penalty.reason}`, penaltyCarIdx: penalty.carIdx, penaltyReason: penalty.reason });
@@ -409,9 +492,10 @@ class SafetyCarController extends EventEmitter {
         const value = this.config.schedule.basis === 'minutes' ? Number(this.context.sessionTime || 0) / 60 : Number(this.context.leaderLap || 0);
         const due = this.scheduleStatus().find(item => !item.called && value >= item.point);
         if (due) {
+            if (!evaluateLiveAuthority(this.context).ok || this.context.hasAI && this.config.procedure !== 'native') return;
+            this.deploy(this.config.procedure, `scheduled ${this.config.schedule.basis === 'minutes' ? 'minute' : 'lap'} ${due.point}`);
             this.scheduleCalled.add(due.index);
             this.pendingScheduledNativeYellow = this.config.procedure === 'native';
-            this.deploy(this.config.procedure, `scheduled ${this.config.schedule.basis === 'minutes' ? 'minute' : 'lap'} ${due.point}`);
         }
     }
 
@@ -426,7 +510,7 @@ class SafetyCarController extends EventEmitter {
         const order = physicalOrder(this.context.drivers).filter(d => !d.onPitRoad && Number.isFinite(d.lapDistPct));
         if (order.length < 2) return false;
         const leader = order[0];
-        if (requireLeaderTarget && Number.isFinite(leader.speedKph) && leader.speedKph > this.config.leaderGatherKph + this.config.speedToleranceKph) return false;
+        if (requireLeaderTarget && (!Number.isFinite(leader.speedKph) || leader.speedKph > this.config.leaderGatherKph + this.config.speedToleranceKph)) return false;
         const offsets = order.map(d => ((Number(leader.lapDistPct) - Number(d.lapDistPct)) + 1) % 1).sort((a, b) => a - b);
         const secondsPerLapAtLimit = trackLengthM / (this.config.speedLimitKph / 3.6);
         for (let i = 1; i < offsets.length; i += 1) {
@@ -436,11 +520,11 @@ class SafetyCarController extends EventEmitter {
     }
 
     _refreshWaveQueue() {
-        if (!this.config.waveArounds || !['wave-arounds'].includes(this.phase)) {
+        if (!this.config.waveArounds || this.wavesComplete || !['wave-arounds'].includes(this.phase)) {
             this.waveQueue = [];
             return this.waveQueue;
         }
-        const leaderCarIdx = this.orderLock?.entries?.[0]?.carIdx || physicalOrder(this.context.drivers)[0]?.carIdx;
+        const leaderCarIdx = this.orderLock?.entries?.[0]?.carIdx ?? physicalOrder(this.context.drivers)[0]?.carIdx;
         const pendingCars = new Set([...this.pendingWaves.values()].map(value => typeof value === 'object' ? value.carIdx : value));
         this.waveQueue = waveCandidates(this.context.drivers, leaderCarIdx, { referencePct: this.context.paceCarLapDistPct })
             .filter(d => !this.waved.has(d.carIdx) && !pendingCars.has(d.carIdx));
@@ -535,13 +619,25 @@ class SafetyCarController extends EventEmitter {
         });
     }
 
-    _announce(text, audioCue, carIdx = null, speechText = null) { this._command('announce', `/all ${text}`, { text, speechText: speechText || text, audioCue, carIdx }); }
+    _driverNumber(carIdx) {
+        const driver = this.context.drivers.find(d => d.carIdx === carIdx);
+        if (!driver || !/^\d{1,3}$/.test(String(driver.carNumber))) throw new Error('Driver has no valid unique car number for a private instruction.');
+        if (this.context.drivers.filter(d => d.carNumber === driver.carNumber).length !== 1) throw new Error('Duplicate car number: private instruction blocked.');
+        return driver.carNumber;
+    }
+    _announce(text, audioCue, carIdx = null, speechText = null) {
+        const driver = carIdx == null ? null : this.context.drivers.find(d => d.carIdx === carIdx);
+        if (driver?.isAI) { this._record('ai-private-message-skipped', { carIdx }); return; }
+        const prefix = carIdx == null ? '/all' : `/${this._driverNumber(carIdx)}`;
+        // Private instructions remain text-only; voice output goes to the whole radio channel.
+        return this._command('announce', `${prefix} ${text}`, { speechText: speechText || text, audioCue: carIdx == null ? audioCue : null, carIdx });
+    }
     _command(kind, text, extra = {}) {
         const suffix = extra.commandKey || `sequence:${++this.commandSequence}`;
         const id = `${this.procedureId || 'idle'}:${suffix}`;
         if (this.emittedCommandIds.has(id)) { this._record('command-duplicate-blocked', { commandId: id, kind, text }); return null; }
         this.emittedCommandIds.add(id);
-        const command = { id, at: this.now(), kind, text, armed: !!this.config.outputArmed && !this.context.simulated && !this.interlock, ...extra };
+        const command = { id, procedureId: this.procedureId, at: this.now(), kind, text, armed: !!this.config.outputArmed && !this.context.simulated && !this.interlock, ...extra };
         if (command.armed) this.pendingCommands.set(id, { kind, text, at: command.at });
         this.emit('command', command);
         this._record('command', command);
@@ -583,6 +679,7 @@ class SafetyCarController extends EventEmitter {
         this.lastLeaderPct = null;
         this.packStableSince = null;
         this.packReady = false;
+        this.code80TargetLap = null; this.nativeYellowSeen = false; this.nativeRequestedAt = null; this.wavesComplete = false;
         this.violations.clear();
         this.speedCandidates.clear();
         this.passCandidates.clear();
@@ -606,6 +703,7 @@ class SafetyCarController extends EventEmitter {
         return {
             schemaVersion: 1, active: true, savedAt: this.now(), procedureId: this.procedureId,
             boundSessionIdentity: this.boundSessionIdentity, phase: this.phase, procedure: this.procedure,
+            code80TargetLap: this.code80TargetLap, nativeYellowSeen: this.nativeYellowSeen, nativeRequestedAt: this.nativeRequestedAt, wavesComplete: this.wavesComplete,
             countdownEndsAt: this.countdownEndsAt, orderLock: this.orderLock, restartLock: this.restartLock,
             violations: [...this.violations.entries()], speedCandidates: [...this.speedCandidates.entries()], passCandidates: [...this.passCandidates.entries()], penalties: this.penalties, waved: [...this.waved], pendingWaves: [...this.pendingWaves.entries()], continuity: this.continuity.serialize(),
             lastWaveAt: this.lastWaveAt, lastReminderAt: this.lastReminderAt, lastLeaderPct: this.lastLeaderPct,
@@ -624,6 +722,7 @@ class SafetyCarController extends EventEmitter {
     _restoreActiveState(saved) {
         this.phase = saved.phase; this.procedure = saved.procedure; this.procedureId = saved.procedureId;
         this.boundSessionIdentity = saved.boundSessionIdentity; this.countdownEndsAt = saved.countdownEndsAt;
+        this.code80TargetLap = saved.code80TargetLap ?? null; this.nativeYellowSeen = !!saved.nativeYellowSeen; this.nativeRequestedAt = saved.nativeRequestedAt ?? null; this.wavesComplete = !!saved.wavesComplete;
         this.orderLock = saved.orderLock; this.restartLock = saved.restartLock;
         this.violations = new Map(saved.violations || []); this.speedCandidates = new Map(saved.speedCandidates || []); this.passCandidates = new Map(saved.passCandidates || []); this.penalties = saved.penalties || [];
         this.waved = new Set(saved.waved || []); this.pendingWaves = new Map(saved.pendingWaves || []); this.lastWaveAt = saved.lastWaveAt || 0;
