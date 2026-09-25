@@ -1,6 +1,6 @@
 {
   "name": "gsrc-safety-car-controller",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "GSRC Safety Car Controller — assisted iRacing caution, Code 80, wave-around and restart control",
   "author": "Joshua Zuino / Gentlemen's Sim Racing Club Inc.",
   "main": "gui/main.js",

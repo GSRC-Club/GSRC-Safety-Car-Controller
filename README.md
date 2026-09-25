@@ -15,6 +15,8 @@ The application is a clean-room GSRC implementation. It does not copy iCASContro
 
 ## 0.2.2 test build
 
+**0.2.3 offline testing fallback:** In a detected local AI race, Deploy automatically uses native iRacing Yellow even when Code 80 or Human Safety Car is selected. Scheduled and incident-triggered deployments use the same fallback. The saved plan remains unchanged, and the audit records the substitution. This tests native safety-car behavior, not bot compliance with Code 80 instructions. Live output must still be armed, and the race must support full-course cautions.
+
 For an **AI race with bots, choose iRacing Yellow**. Bots do not follow Code 80 chat instructions or private messages. Native deployment waits for caution telemetry; native restart requests `!pacelaps 1` and waits for iRacing's green. Local AI sessions without online session IDs are supported while the same connection remains active.
 
 Human Code 80 now sends private leader, correction and wave instructions. Set **Code 80 laps**, use **PACE LAP −1 / +1** to adjust the planned duration, and confirm **WAVES REJOINED** before restarting. These lap controls never automatically force green. Full procedure details and remaining real-session checks are in the [0.2.2 test checklist](docs/TEST-SESSION-0.2.2.md); the [readiness review](research/2026-09-25-READINESS-REVIEW.md) records reproduced defects and recent GitHub comparisons.

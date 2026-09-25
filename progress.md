@@ -1,5 +1,12 @@
 # GSRC Safety Car Controller progress
 
+## 2026-09-25 — Minimal offline AI testing fallback (0.2.3)
+
+- [x] Local AI sessions automatically substitute native yellow for chat-only procedures at deployment; preserve the selected plan and record the substitution. Scheduled calls count the resulting native-yellow echo once. Six controller lines added/changed.
+- Verification: two regression cases failed before the patch; clean `npm ci`, 71/71 tests, reviewed diff and `git diff --check`; pinned, timestamped Windows installer verified. Existing online/replay/arming safeguards remain enforced.
+- Installer: `Y:\GSRC-Safety-Car-Controller-builds\0.2.3\GSRC-Safety-Car-Controller-Setup-0.2.3.exe`; SHA-256 `FE4A79C8F93E04E7FE372FC793F0990E69BCE6E7F1A21FA493D8E8AD5ED6D826`.
+- Environment: Windows and synthetic offline-race tests. Actual iRacing bot response remains a live acceptance check. This fallback tests native yellow, not Code 80 bot obedience. No production deployment.
+
 ## 2026-09-25 — AI race readiness and Code 80 corrections (0.2.2)
 
 - [x] Reproduce and fix live-replay authority, local AI identity, private chat routing and false local-send success. Detect AI rosters and explain the required native-yellow procedure.

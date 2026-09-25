@@ -92,6 +92,10 @@ class SafetyCarController extends EventEmitter {
         if (ACTIVE_PHASES.has(this.phase) || this.recoveryRequired) throw new Error('A safety-car procedure is already active or requires recovery.');
         this._requireRaceContext();
         if (!['native', 'manual-driver', 'code80-bunch', 'code80-strict'].includes(procedure)) throw new Error('Select a supported deployment procedure.');
+        if (!this.context.simulated && this.context.hasAI && this.context.sessionIdentity?.startsWith('ai:') && procedure !== 'native') {
+            this._record('offline-native-fallback', { requestedProcedure: procedure, reason: 'Offline AI test uses iRacing Yellow; bots cannot follow chat-only pacing.' });
+            procedure = 'native';
+        }
         if (!this.context.simulated && this.context.hasAI && procedure !== 'native') throw new Error('AI drivers cannot follow chat-only Code 80 or human safety-car instructions. Select iRacing Yellow for an AI race.');
         this.penalties = [];
         this.procedure = procedure;
@@ -492,10 +496,10 @@ class SafetyCarController extends EventEmitter {
         const value = this.config.schedule.basis === 'minutes' ? Number(this.context.sessionTime || 0) / 60 : Number(this.context.leaderLap || 0);
         const due = this.scheduleStatus().find(item => !item.called && value >= item.point);
         if (due) {
-            if (!evaluateLiveAuthority(this.context).ok || this.context.hasAI && this.config.procedure !== 'native') return;
+            if (!evaluateLiveAuthority(this.context).ok || this.context.hasAI && this.config.procedure !== 'native' && !this.context.sessionIdentity?.startsWith('ai:')) return;
             this.deploy(this.config.procedure, `scheduled ${this.config.schedule.basis === 'minutes' ? 'minute' : 'lap'} ${due.point}`);
             this.scheduleCalled.add(due.index);
-            this.pendingScheduledNativeYellow = this.config.procedure === 'native';
+            this.pendingScheduledNativeYellow = this.procedure === 'native';
         }
     }
 
